@@ -226,5 +226,32 @@ public class Win32 extends Win32$shared {
            throw new AssertionError("should not reach here", ex$);
         }
     }
+    private static final int ERROR_INVALID_DATA = (int)13L;
+    /**
+     * {@snippet lang=c :
+     * #define ERROR_INVALID_DATA 13
+     * }
+     */
+    public static int ERROR_INVALID_DATA() {
+        return ERROR_INVALID_DATA;
+    }
+    private static final int NTE_BAD_DATA = (int)-2146893819L;
+    /**
+     * {@snippet lang=c :
+     * #define NTE_BAD_DATA -2146893819
+     * }
+     */
+    public static int NTE_BAD_DATA() {
+        return NTE_BAD_DATA;
+    }
+    private static final int NTE_BAD_KEY_STATE = (int)-2146893813L;
+    /**
+     * {@snippet lang=c :
+     * #define NTE_BAD_KEY_STATE -2146893813
+     * }
+     */
+    public static int NTE_BAD_KEY_STATE() {
+        return NTE_BAD_KEY_STATE;
+    }
 }
 
