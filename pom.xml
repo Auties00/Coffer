@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>com.github.auties00</groupId>
+    <artifactId>coffer</artifactId>
+    <version>${revision}</version>
+    <name>${project.groupId}:${project.artifactId}</name>
+    <description>A keyring for the secrets of Java applications: the Windows Data Protection API, the macOS Keychain and the freedesktop Secret Service, with no native library to ship</description>
+    <url>https://github.com/Auties00/Coffer</url>
+    <inceptionYear>2026</inceptionYear>
+
+    <developers>
+        <developer>
+            <id>Auties00</id>
+            <name>Alessandro Autiero</name>
+            <email>alautiero@gmail.com</email>
+            <url>https://github.com/Auties00</url>
+        </developer>
+    </developers>
+
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://www.opensource.org/licenses/mit-license.php</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <scm>
+        <url>https://github.com/Auties00/Coffer</url>
+        <connection>scm:git:https://github.com/Auties00/Coffer.git</connection>
+    </scm>
+
+    <properties>
+        <revision>0.1.0-SNAPSHOT</revision>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <java.version>26</java.version>
+        <maven.compiler.plugin.version>3.15.0</maven.compiler.plugin.version>
+        <maven.surefire.plugin.version>3.5.2</maven.surefire.plugin.version>
+        <maven.javadoc.plugin.version>3.12.0</maven.javadoc.plugin.version>
+        <junit.version>5.11.4</junit.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>${maven.compiler.plugin.version}</version>
+                <configuration>
+                    <release>${java.version}</release>
+                    <compilerArgs>
+                        <arg>-Xlint:all,-processing,-serial,-restricted,-module</arg>
+                    </compilerArgs>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>${maven.surefire.plugin.version}</version>
+                <configuration>
+                    <!-- The Windows and macOS backends call native functions; the tests also start child JVMs from the class path -->
+                    <argLine>--enable-native-access=com.github.auties00.coffer,ALL-UNNAMED</argLine>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-javadoc-plugin</artifactId>
+                <version>${maven.javadoc.plugin.version}</version>
+                <configuration>
+                    <tags>
+                        <tag>
+                            <name>apiNote</name>
+                            <placement>a</placement>
+                            <head>API Note:</head>
+                        </tag>
+                        <tag>
+                            <name>implSpec</name>
+                            <placement>a</placement>
+                            <head>Implementation Requirements:</head>
+                        </tag>
+                        <tag>
+                            <name>implNote</name>
+                            <placement>a</placement>
+                            <head>Implementation Note:</head>
+                        </tag>
+                    </tags>
+                    <!-- The bindings jextract generates are not documented -->
+                    <excludePackageNames>com.github.auties00.coffer.backend.windows.ffm:com.github.auties00.coffer.backend.macos.ffm</excludePackageNames>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

@@ -1,0 +1,77 @@
+# Pushes and pull requests: the whole test suite on each system, against its real keyring.
+name: CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    env:
+      # The keyring tests fail, rather than skip, when the system's keyring cannot be reached
+      COFFER_REQUIRE_KEYRING: 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '26'
+          cache: maven
+
+      # A session bus on a socket path, since the JDK cannot reach abstract sockets, and GNOME Keyring on it with an
+      # unlocked login collection
+      - name: Start a session bus and a keyring
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gnome-keyring dbus > /dev/null
+          address="unix:path=$RUNNER_TEMP/session-bus"
+          dbus-daemon --session --address="$address" --fork --print-pid
+          echo "DBUS_SESSION_BUS_ADDRESS=$address" >> "$GITHUB_ENV"
+          export DBUS_SESSION_BUS_ADDRESS="$address"
+          printf 'coffer' | gnome-keyring-daemon --unlock --components=secrets
+
+      # A default keychain that never locks, so the tests never meet a password dialog
+      - name: Create a keychain
+        if: runner.os == 'macOS'
+        run: |
+          security create-keychain -p coffer coffer.keychain
+          security list-keychains -d user -s coffer.keychain $(security list-keychains -d user | tr -d '"')
+          security default-keychain -s coffer.keychain
+          security unlock-keychain -p coffer coffer.keychain
+          security set-keychain-settings coffer.keychain
+
+      - name: Test
+        run: mvn -B -ntp verify
+
+      - name: Upload the test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports-${{ matrix.os }}
+          path: target/surefire-reports/
+          retention-days: 14

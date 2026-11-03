@@ -1,0 +1,123 @@
+# Regenerates the jextract bindings of the Windows and macOS backends on their own systems, whose headers only they
+# have, and commits them to the branch it runs on. Started by hand after a change to bindings/.
+name: Bindings
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: bindings-${{ github.ref }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  JEXTRACT: https://download.java.net/java/early_access/jextract/25/2/openjdk-25-jextract+2-4
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # Puts the Windows SDK headers on INCLUDE, where jextract's clang looks for them
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Download jextract
+        run: |
+          curl -fsSL -o jextract.tar.gz "${JEXTRACT}_windows-x64_bin.tar.gz"
+          mkdir jextract
+          tar -xzf jextract.tar.gz -C jextract --strip-components=1
+          ls jextract/bin
+
+      - name: Generate
+        shell: pwsh
+        run: |
+          Remove-Item -Recurse -Force src/main/java/com/github/auties00/coffer/backend/windows/ffm -ErrorAction SilentlyContinue
+          $launcher = Get-ChildItem jextract/bin | Where-Object { $_.BaseName -eq 'jextract' -and $_.Extension -in '.bat', '.cmd', '.exe' } | Select-Object -First 1
+          & $launcher.FullName "@bindings/windows.args" bindings/windows.h
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-bindings
+          path: src/main/java/com/github/auties00/coffer/backend/windows/ffm
+          if-no-files-found: error
+
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download jextract
+        run: |
+          arch=$([ "$(uname -m)" = arm64 ] && echo aarch64 || echo x64)
+          curl -fsSL -o jextract.tar.gz "${JEXTRACT}_macos-${arch}_bin.tar.gz"
+          mkdir jextract
+          tar -xzf jextract.tar.gz -C jextract --strip-components=1
+          # The download is not notarized
+          xattr -dr com.apple.quarantine jextract || true
+
+      - name: Generate
+        run: |
+          rm -rf src/main/java/com/github/auties00/coffer/backend/macos/ffm
+          jextract/bin/jextract @bindings/macos.args bindings/macos.h
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-bindings
+          path: src/main/java/com/github/auties00/coffer/backend/macos/ffm
+          if-no-files-found: error
+
+  commit:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Remove the old bindings
+        run: rm -rf src/main/java/com/github/auties00/coffer/backend/windows/ffm src/main/java/com/github/auties00/coffer/backend/macos/ffm
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-bindings
+          path: src/main/java/com/github/auties00/coffer/backend/windows/ffm
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-bindings
+          path: src/main/java/com/github/auties00/coffer/backend/macos/ffm
+
+      - name: Commit
+        id: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/main/java/com/github/auties00/coffer/backend/windows/ffm src/main/java/com/github/auties00/coffer/backend/macos/ffm
+          if git diff --cached --quiet; then
+            echo "The bindings did not change"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git commit -m "Regenerate the jextract bindings"
+          git push
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      # A push with the workflow's token starts no workflow, so CI is started by hand
+      - name: Test the new bindings
+        if: steps.commit.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run ci.yml --ref "${GITHUB_REF_NAME}"
