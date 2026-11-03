@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -103,8 +104,16 @@ class DBusCodecTest {
 
     @Test
     @DisplayName("address values lose their escapes")
+    void unescape() {
+        assertEquals("/run/user/1000/bus", DBusAddress.unescape("%2frun%2Fuser/1000/bus"));
+        assertEquals("plain", DBusAddress.unescape("plain"));
+    }
+
+    @Test
+    @DisplayName("an address list yields its Unix sockets, path addresses first")
     void addresses() {
-        assertEquals("/run/user/1000/bus", DBusConnection.unescape("%2frun%2Fuser/1000/bus"));
-        assertTrue(DBusConnection.unescape("plain").equals("plain"));
+        var parsed = DBusAddress.parse("unix:abstract=/tmp/dbus-AbC,guid=0123;tcp:host=localhost,port=1;unix:tmpdir=/tmp;unix:path=/run/user/1000/bus");
+        assertEquals(List.of(new DBusAddress.UnixPath(Path.of("/run/user/1000/bus")), new DBusAddress.UnixAbstract("/tmp/dbus-AbC")), parsed);
+        assertTrue(DBusAddress.parse("tcp:host=localhost,port=1").isEmpty());
     }
 }

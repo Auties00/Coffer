@@ -1,5 +1,6 @@
-# Regenerates the jextract bindings of the Windows and macOS backends on their own systems, whose headers only they
-# have, and commits them to the branch it runs on. Started by hand after a change to bindings/.
+# Regenerates the jextract bindings on the systems whose headers they come from (the Windows and macOS backends, and
+# the libc calls of the D-Bus abstract-socket transport on Linux), and commits them to the branch it runs on. Started
+# by hand after a change to bindings/.
 name: Bindings
 
 on:
@@ -80,15 +81,40 @@ jobs:
           path: src/main/java/com/github/auties00/coffer/backend/macos/ffm
           if-no-files-found: error
 
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download jextract
+        run: |
+          curl -fsSL -o jextract.tar.gz "${JEXTRACT}_linux-x64_bin.tar.gz"
+          mkdir jextract
+          tar -xzf jextract.tar.gz -C jextract --strip-components=1
+
+      - name: Generate
+        run: |
+          rm -rf src/main/java/com/github/auties00/coffer/backend/dbus/ffm
+          jextract/bin/jextract @bindings/linux.args bindings/linux.h
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-bindings
+          path: src/main/java/com/github/auties00/coffer/backend/dbus/ffm
+          if-no-files-found: error
+
   commit:
-    needs: [windows, macos]
+    needs: [windows, macos, linux]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
       - name: Remove the old bindings
-        run: rm -rf src/main/java/com/github/auties00/coffer/backend/windows/ffm src/main/java/com/github/auties00/coffer/backend/macos/ffm
+        run: rm -rf src/main/java/com/github/auties00/coffer/backend/windows/ffm src/main/java/com/github/auties00/coffer/backend/macos/ffm src/main/java/com/github/auties00/coffer/backend/dbus/ffm
 
       - uses: actions/download-artifact@v4
         with:
@@ -100,12 +126,17 @@ jobs:
           name: macos-bindings
           path: src/main/java/com/github/auties00/coffer/backend/macos/ffm
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-bindings
+          path: src/main/java/com/github/auties00/coffer/backend/dbus/ffm
+
       - name: Commit
         id: commit
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/main/java/com/github/auties00/coffer/backend/windows/ffm src/main/java/com/github/auties00/coffer/backend/macos/ffm
+          git add src/main/java/com/github/auties00/coffer/backend/windows/ffm src/main/java/com/github/auties00/coffer/backend/macos/ffm src/main/java/com/github/auties00/coffer/backend/dbus/ffm
           if git diff --cached --quiet; then
             echo "The bindings did not change"
             echo "changed=false" >> "$GITHUB_OUTPUT"

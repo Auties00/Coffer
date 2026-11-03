@@ -10,21 +10,57 @@ import java.lang.foreign.ValueLayout;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.IntSupplier;
 
 /// The [com.github.auties00.coffer.Backend#MACOS_KEYCHAIN] backend: each secret a generic password of the user's
 /// default keychain, its service `coffer/` and the namespace, its account the name.
 ///
 /// The keychain grants the application that created an item access to it without asking; any other application, or
-/// the same one after an update that changed its code signature, makes the keychain ask the user. A locked keychain
-/// asks for its password on its own.
+/// the same one after an update that changed its code signature, makes the keychain ask the user, and so does a locked
+/// keychain, for its password.
+///
+/// A vault that may not ask turns the keychain's user interaction off for each call and back to what it was after:
+/// the file-based keychain an unsigned process uses ignores the per-query flags that the data protection keychain
+/// honours, and `SecKeychainSetUserInteractionAllowed` is the only switch it obeys. The switch is process-wide, so the
+/// calls of every non-interactive vault are serialized, and other keychain users of the process may see interaction
+/// refused while one runs. An interactive vault leaves the switch alone and waits as long as the keychain's dialog
+/// stays open.
 ///
 /// @spec https://developer.apple.com/documentation/security/keychain-services Keychain services
 public final class KeychainVault implements Vault {
+    // Serializes the process-wide interaction switch between non-interactive calls
+    private static final ReentrantLock INTERACTION = new ReentrantLock();
+
     private final String service;
+    private final boolean interactive;
 
     /// Creates the vault of `namespace`.
-    public KeychainVault(String namespace) {
+    ///
+    /// @param interactive whether the keychain may ask the user
+    public KeychainVault(String namespace, boolean interactive) {
         this.service = "coffer/" + namespace;
+        this.interactive = interactive;
+    }
+
+    /// {@return the status of `keychainCall`, made with user interaction refused unless the vault is interactive}
+    private int call(IntSupplier keychainCall) {
+        if (interactive) {
+            return keychainCall.getAsInt();
+        }
+        INTERACTION.lock();
+        try (var arena = Arena.ofConfined()) {
+            var previous = arena.allocate(ValueLayout.JAVA_BYTE);
+            check(Darwin.SecKeychainGetUserInteractionAllowed(previous), "read whether it may ask the user");
+            check(Darwin.SecKeychainSetUserInteractionAllowed((byte) 0), "stop asking the user");
+            try {
+                return keychainCall.getAsInt();
+            } finally {
+                Darwin.SecKeychainSetUserInteractionAllowed(previous.get(ValueLayout.JAVA_BYTE, 0));
+            }
+        } finally {
+            INTERACTION.unlock();
+        }
     }
 
     @Override
@@ -37,7 +73,7 @@ public final class KeychainVault implements Vault {
                     Darwin.kSecReturnData(), Darwin.kCFBooleanTrue(),
                     Darwin.kSecMatchLimit(), Darwin.kSecMatchLimitOne());
             var result = objects.arena().allocate(ValueLayout.ADDRESS);
-            var status = Darwin.SecItemCopyMatching(query, result);
+            var status = call(() -> Darwin.SecItemCopyMatching(query, result));
             if (status == Darwin.errSecItemNotFound()) {
                 return null;
             }
@@ -56,7 +92,7 @@ public final class KeychainVault implements Vault {
                     Darwin.kSecAttrAccount(), objects.string(name));
             var value = objects.data(secret);
             var update = objects.dictionary(Darwin.kSecValueData(), value);
-            var status = Darwin.SecItemUpdate(query, update);
+            var status = call(() -> Darwin.SecItemUpdate(query, update));
             if (status == Darwin.errSecItemNotFound()) {
                 var item = objects.dictionary(
                         Darwin.kSecClass(), Darwin.kSecClassGenericPassword(),
@@ -64,10 +100,10 @@ public final class KeychainVault implements Vault {
                         Darwin.kSecAttrAccount(), objects.string(name),
                         Darwin.kSecAttrLabel(), objects.string(service + "/" + name),
                         Darwin.kSecValueData(), value);
-                status = Darwin.SecItemAdd(item, MemorySegment.NULL);
+                status = call(() -> Darwin.SecItemAdd(item, MemorySegment.NULL));
                 if (status == Darwin.errSecDuplicateItem()) {
                     // Added by another process since the update found nothing
-                    status = Darwin.SecItemUpdate(query, update);
+                    status = call(() -> Darwin.SecItemUpdate(query, update));
                 }
             }
             check(status, "write the secret " + name);
@@ -81,7 +117,7 @@ public final class KeychainVault implements Vault {
                     Darwin.kSecClass(), Darwin.kSecClassGenericPassword(),
                     Darwin.kSecAttrService(), objects.string(service),
                     Darwin.kSecAttrAccount(), objects.string(name));
-            var status = Darwin.SecItemDelete(query);
+            var status = call(() -> Darwin.SecItemDelete(query));
             if (status == Darwin.errSecItemNotFound()) {
                 return false;
             }
@@ -99,7 +135,7 @@ public final class KeychainVault implements Vault {
                     Darwin.kSecReturnAttributes(), Darwin.kCFBooleanTrue(),
                     Darwin.kSecMatchLimit(), Darwin.kSecMatchLimitAll());
             var result = objects.arena().allocate(ValueLayout.ADDRESS);
-            var status = Darwin.SecItemCopyMatching(query, result);
+            var status = call(() -> Darwin.SecItemCopyMatching(query, result));
             if (status == Darwin.errSecItemNotFound()) {
                 return List.of();
             }

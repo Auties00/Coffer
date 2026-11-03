@@ -6,11 +6,14 @@ import com.github.auties00.coffer.CofferException;
 
 import java.io.IOException;
 import java.nio.channels.FileChannel;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.security.SecureRandom;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -19,12 +22,19 @@ import java.util.concurrent.locks.ReentrantLock;
 
 /// A [Coffer] over the [Vault] of its backend.
 ///
-/// The namespace's directory holds a record of the backend, written with the first secret, and a lock file: creating
-/// a secret holds a lock of this process for the directory, then an operating system lock on the file, since the JDK
-/// refuses two locks on one file in one process.
+/// The namespace's directory holds the record of its backend and a lock file. Every write checks the record, holding
+/// the directory lock: the first one writes it, and a write made after another process moved the secrets fails rather
+/// than store a secret where no later coffer looks. The lock is a lock of this process for the directory, then an
+/// operating system lock on the file, since the JDK refuses two locks on one file in one process.
+///
+/// ```text
+/// SECRET_SERVICE           the backend
+/// from FILE                while a move away from FILE has not deleted its secrets there yet
+/// ```
 public final class LiveCoffer implements Coffer {
-    static final String BACKEND_FILE = "backend";
+    static final String RECORD_FILE = "backend";
     private static final String LOCK_FILE = ".lock";
+    private static final String LEAVING = "from ";
     private static final SecureRandom RANDOM = new SecureRandom();
     // One lock per namespace directory, for the threads of this process
     private static final ConcurrentHashMap<Path, ReentrantLock> DIRECTORY_LOCKS = new ConcurrentHashMap<>();
@@ -33,33 +43,62 @@ public final class LiveCoffer implements Coffer {
     private final Backend backend;
     private final Vault vault;
     private final Path directory;
+    private final Opener opener;
     private volatile boolean closed;
-    private volatile boolean recordWritten;
 
     /// Creates the coffer of `namespace` over `vault`.
     ///
-    /// @param recorded whether `directory` records the backend already
-    LiveCoffer(String namespace, Backend backend, Vault vault, Path directory, boolean recorded) {
+    /// @param opener opens the vault of another backend, for [#moveTo(Backend)]
+    LiveCoffer(String namespace, Backend backend, Vault vault, Path directory, Opener opener) {
         this.namespace = namespace;
         this.backend = backend;
         this.vault = vault;
         this.directory = directory;
-        this.recordWritten = recorded;
+        this.opener = opener;
     }
 
-    /// {@return the backend recorded in `directory`, or `null` if the namespace has never stored a secret}
-    static Backend recordedBackend(Path directory) {
+    /// Opens the vault of a backend, as the builder of a coffer would.
+    @FunctionalInterface
+    interface Opener {
+        /// @throws CofferException with [CofferException.Reason#UNAVAILABLE] if the backend cannot be reached
+        Vault open(Backend backend);
+    }
+
+    /// The backend of a namespace, as its directory records it.
+    ///
+    /// @param backend where the secrets are
+    /// @param leaving the backend a move took them from, which may still hold copies, or `null`
+    record Record(Backend backend, Backend leaving) {
+        String encode() {
+            return backend.name() + "\n" + (leaving == null ? "" : LEAVING + leaving.name() + "\n");
+        }
+    }
+
+    /// {@return the record in `directory`, or `null` if the namespace has never stored a secret}
+    static Record readRecord(Path directory) {
+        String text;
         try {
-            var name = Files.readString(directory.resolve(BACKEND_FILE)).strip();
-            try {
-                return Backend.valueOf(name);
-            } catch (IllegalArgumentException exception) {
-                throw new CofferException(CofferException.Reason.CORRUPTED, "The backend recorded in " + directory + " is unknown: " + name, exception);
-            }
+            text = Files.readString(directory.resolve(RECORD_FILE), StandardCharsets.US_ASCII);
         } catch (NoSuchFileException _) {
             return null;
         } catch (IOException exception) {
             throw new CofferException(CofferException.Reason.IO, "The backend recorded in " + directory + " could not be read", exception);
+        }
+        try {
+            var lines = text.strip().lines().toList();
+            var backend = Backend.valueOf(lines.getFirst().strip());
+            var leaving = lines.size() > 1 && lines.get(1).startsWith(LEAVING) ? Backend.valueOf(lines.get(1).substring(LEAVING.length()).strip()) : null;
+            return new Record(backend, leaving);
+        } catch (RuntimeException exception) {
+            throw new CofferException(CofferException.Reason.CORRUPTED, "The backend recorded in " + directory + " is not one Coffer knows", exception);
+        }
+    }
+
+    private void writeRecord(Record record) {
+        try {
+            PrivateFiles.write(directory.resolve(RECORD_FILE), record.encode().getBytes(StandardCharsets.US_ASCII));
+        } catch (IOException exception) {
+            throw new CofferException(CofferException.Reason.IO, "The backend of " + namespace + " could not be recorded", exception);
         }
     }
 
@@ -89,7 +128,7 @@ public final class LiveCoffer implements Coffer {
         }
         ensureOpen();
         withDirectoryLock(() -> {
-            record();
+            claim();
             vault.write(name, secret.clone());
             return null;
         });
@@ -112,7 +151,7 @@ public final class LiveCoffer implements Coffer {
             if (raced != null) {
                 return raced;
             }
-            record();
+            claim();
             var created = new byte[length];
             RANDOM.nextBytes(created);
             vault.write(name, created);
@@ -134,6 +173,97 @@ public final class LiveCoffer implements Coffer {
     }
 
     @Override
+    public Coffer moveTo(Backend target) {
+        Objects.requireNonNull(target, "target");
+        ensureOpen();
+        if (target == backend) {
+            return this;
+        }
+        var destination = opener.open(target);
+        try {
+            withDirectoryLock(() -> {
+                var record = readRecord(directory);
+                if (record != null && record.backend() != backend) {
+                    throw moved(record.backend());
+                }
+                // The record does not name the destination, so what it holds is stale: copies of an earlier move that
+                // was cut short before the record changed
+                for (var name : destination.names()) {
+                    destination.delete(name);
+                }
+                var copied = new ArrayList<String>();
+                try {
+                    for (var name : vault.names()) {
+                        var secret = vault.read(name);
+                        if (secret != null) {
+                            try {
+                                destination.write(name, secret);
+                                copied.add(name);
+                            } finally {
+                                Arrays.fill(secret, (byte) 0);
+                            }
+                        }
+                    }
+                } catch (RuntimeException exception) {
+                    // The record still names this backend: take back what was copied
+                    for (var name : copied) {
+                        try {
+                            destination.delete(name);
+                        } catch (RuntimeException cleanup) {
+                            exception.addSuppressed(cleanup);
+                        }
+                    }
+                    throw exception;
+                }
+                writeRecord(new Record(target, backend));
+                deleteLeft(vault, target);
+                return null;
+            });
+        } catch (RuntimeException exception) {
+            destination.close();
+            throw exception;
+        }
+        close();
+        return new LiveCoffer(namespace, target, destination, directory, opener);
+    }
+
+    /// Deletes the secrets a move left in the backend it took them from, then records that it is done.
+    ///
+    /// A backend that cannot be reached keeps them until the namespace next opens with it reachable.
+    void finishMove(Backend leaving) {
+        withDirectoryLock(() -> {
+            var record = readRecord(directory);
+            if (record == null || record.backend() != backend || record.leaving() != leaving) {
+                return null;
+            }
+            Vault old;
+            try {
+                old = opener.open(leaving);
+            } catch (CofferException exception) {
+                if (exception.reason() == CofferException.Reason.UNAVAILABLE) {
+                    return null;
+                }
+                throw exception;
+            }
+            try {
+                deleteLeft(old, backend);
+            } finally {
+                old.close();
+            }
+            return null;
+        });
+    }
+
+    /// Deletes every secret of `left`, which a move to `target` copied, then records the move as done; called holding
+    /// the directory lock.
+    private void deleteLeft(Vault left, Backend target) {
+        for (var name : left.names()) {
+            left.delete(name);
+        }
+        writeRecord(new Record(target, null));
+    }
+
+    @Override
     public void close() {
         if (!closed) {
             closed = true;
@@ -147,24 +277,19 @@ public final class LiveCoffer implements Coffer {
         }
     }
 
-    /// Records the backend, so later coffers of the namespace use it; called holding the directory lock.
-    private void record() {
-        if (recordWritten) {
-            return;
+    /// Records this coffer's backend as the namespace's, or checks that it still is; called holding the directory lock.
+    private void claim() {
+        var record = readRecord(directory);
+        if (record == null) {
+            writeRecord(new Record(backend, null));
+        } else if (record.backend() != backend) {
+            throw moved(record.backend());
         }
-        var current = recordedBackend(directory);
-        if (current != null && current != backend) {
-            throw new CofferException(CofferException.Reason.UNAVAILABLE,
-                    "Another process stored the secrets of " + namespace + " in " + current + " while this coffer uses " + backend, null);
-        }
-        if (current == null) {
-            try {
-                PrivateFiles.write(directory.resolve(BACKEND_FILE), (backend.name() + "\n").getBytes(java.nio.charset.StandardCharsets.US_ASCII));
-            } catch (IOException exception) {
-                throw new CofferException(CofferException.Reason.IO, "The backend of " + namespace + " could not be recorded", exception);
-            }
-        }
-        recordWritten = true;
+    }
+
+    private CofferException moved(Backend current) {
+        return new CofferException(CofferException.Reason.UNAVAILABLE,
+                "The secrets of " + namespace + " are in " + current + " now, not in " + backend + ": open the coffer again", null);
     }
 
     private <T> T withDirectoryLock(Action<T> action) {

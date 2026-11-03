@@ -1,6 +1,7 @@
 package com.github.auties00.coffer.backend.windows;
 
 import com.github.auties00.coffer.CofferException;
+import com.github.auties00.coffer.backend.CapturedCall;
 import com.github.auties00.coffer.backend.SecretFiles;
 import com.github.auties00.coffer.backend.Vault;
 import com.github.auties00.coffer.backend.windows.ffm.Win32;
@@ -22,6 +23,9 @@ import java.util.List;
 ///
 /// @spec https://learn.microsoft.com/en-us/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata CryptProtectData function
 public final class DataProtectionVault implements Vault {
+    private static final CapturedCall PROTECT = CapturedCall.of(Win32.CryptProtectData$address(), Win32.CryptProtectData$descriptor(), "GetLastError");
+    private static final CapturedCall UNPROTECT = CapturedCall.of(Win32.CryptUnprotectData$address(), Win32.CryptUnprotectData$descriptor(), "GetLastError");
+
     private final Path directory;
     private final String namespace;
 
@@ -44,12 +48,12 @@ public final class DataProtectionVault implements Vault {
 
     @Override
     public boolean delete(String name) {
-        return SecretFiles.delete(directory, name);
+        return SecretFiles.delete(directory, name, SecretFiles.DATA_PROTECTION);
     }
 
     @Override
     public List<String> names() {
-        return SecretFiles.names(directory);
+        return SecretFiles.names(directory, SecretFiles.DATA_PROTECTION);
     }
 
     private byte[] entropy(String name) {
@@ -61,10 +65,13 @@ public final class DataProtectionVault implements Vault {
             var data = arena.allocateFrom(ValueLayout.JAVA_BYTE, secret);
             try {
                 var output = _CRYPTOAPI_BLOB.allocate(arena);
-                var succeeded = Win32.CryptProtectData(blob(arena, data), MemorySegment.NULL, blob(arena, arena.allocateFrom(ValueLayout.JAVA_BYTE, entropy(name))),
-                        MemorySegment.NULL, MemorySegment.NULL, Win32.CRYPTPROTECT_UI_FORBIDDEN(), output);
+                var state = CapturedCall.state(arena);
+                var succeeded = (int) PROTECT.invoke(state, blob(arena, data), MemorySegment.NULL,
+                        blob(arena, arena.allocateFrom(ValueLayout.JAVA_BYTE, entropy(name))), MemorySegment.NULL, MemorySegment.NULL,
+                        Win32.CRYPTPROTECT_UI_FORBIDDEN(), output);
                 if (succeeded == 0) {
-                    throw new CofferException(CofferException.Reason.IO, "CryptProtectData could not seal the secret " + name, null);
+                    throw new CofferException(CofferException.Reason.IO,
+                            "CryptProtectData could not seal the secret " + name + " (" + code(PROTECT.error(state)) + ")", null);
                 }
                 return take(output);
             } finally {
@@ -76,15 +83,29 @@ public final class DataProtectionVault implements Vault {
     private byte[] unprotect(String name, byte[] sealed) {
         try (var arena = Arena.ofConfined()) {
             var output = _CRYPTOAPI_BLOB.allocate(arena);
-            var succeeded = Win32.CryptUnprotectData(blob(arena, arena.allocateFrom(ValueLayout.JAVA_BYTE, sealed)), MemorySegment.NULL,
+            var state = CapturedCall.state(arena);
+            var succeeded = (int) UNPROTECT.invoke(state, blob(arena, arena.allocateFrom(ValueLayout.JAVA_BYTE, sealed)), MemorySegment.NULL,
                     blob(arena, arena.allocateFrom(ValueLayout.JAVA_BYTE, entropy(name))), MemorySegment.NULL, MemorySegment.NULL,
                     Win32.CRYPTPROTECT_UI_FORBIDDEN(), output);
             if (succeeded == 0) {
-                throw new CofferException(CofferException.Reason.CORRUPTED,
-                        "The secret " + name + " does not open: it is damaged, or was sealed by another user, on another computer or under another name", null);
+                var error = UNPROTECT.error(state);
+                if (error == Win32.NTE_BAD_KEY_STATE()) {
+                    throw new CofferException(CofferException.Reason.CORRUPTED, "The secret " + name
+                            + " does not open: it was sealed by another user or on another computer, or the user's password was reset ("
+                            + code(error) + ")", null);
+                }
+                if (error == Win32.ERROR_INVALID_DATA() || error == Win32.NTE_BAD_DATA()) {
+                    throw new CofferException(CofferException.Reason.CORRUPTED,
+                            "The secret " + name + " does not open: it is damaged, or was sealed under another name (" + code(error) + ")", null);
+                }
+                throw new CofferException(CofferException.Reason.IO, "CryptUnprotectData could not open the secret " + name + " (" + code(error) + ")", null);
             }
             return take(output);
         }
+    }
+
+    private static String code(int error) {
+        return "Windows error 0x" + Integer.toHexString(error).toUpperCase(java.util.Locale.ROOT);
     }
 
     private static MemorySegment blob(Arena arena, MemorySegment data) {

@@ -18,3 +18,9 @@ LocalFree
 _CRYPTOAPI_BLOB
 --include-constant
 CRYPTPROTECT_UI_FORBIDDEN
+--include-constant
+ERROR_INVALID_DATA
+--include-constant
+NTE_BAD_DATA
+--include-constant
+NTE_BAD_KEY_STATE

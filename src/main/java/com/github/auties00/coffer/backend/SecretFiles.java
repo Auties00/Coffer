@@ -13,6 +13,9 @@ import java.util.List;
 
 /// The files that hold secrets, one per name, for the backends that keep them in the namespace's directory.
 ///
+/// A plain secret is in `<name>.secret`, a sealed one in `<name>.sealed`: both backends may share a directory, which
+/// a move between them fills with the copies before it deletes the originals.
+///
 /// ```text
 /// 0  magic "COFFER"
 /// 6  format version, 1
@@ -27,9 +30,12 @@ public final class SecretFiles {
     public static final byte DATA_PROTECTION = 1;
     private static final byte[] MAGIC = "COFFER".getBytes(StandardCharsets.US_ASCII);
     private static final byte VERSION = 1;
-    private static final String SUFFIX = ".secret";
 
     private SecretFiles() {
+    }
+
+    private static String suffix(byte kind) {
+        return kind == PLAIN ? ".secret" : ".sealed";
     }
 
     /// {@return the payload stored under `name` in `directory`, or `null` if there is none}
@@ -38,7 +44,7 @@ public final class SecretFiles {
     public static byte[] read(Path directory, String name, byte kind) {
         byte[] content;
         try {
-            content = Files.readAllBytes(directory.resolve(name + SUFFIX));
+            content = Files.readAllBytes(directory.resolve(name + suffix(kind)));
         } catch (NoSuchFileException _) {
             return null;
         } catch (IOException exception) {
@@ -66,7 +72,7 @@ public final class SecretFiles {
         content[MAGIC.length + 1] = kind;
         System.arraycopy(payload, 0, content, MAGIC.length + 2, payload.length);
         try {
-            PrivateFiles.write(directory.resolve(name + SUFFIX), content);
+            PrivateFiles.write(directory.resolve(name + suffix(kind)), content);
         } catch (IOException exception) {
             throw new CofferException(CofferException.Reason.IO, "The secret " + name + " could not be written", exception);
         } finally {
@@ -74,12 +80,12 @@ public final class SecretFiles {
         }
     }
 
-    /// Deletes the secret stored under `name` in `directory`.
+    /// Deletes the secret of `kind` stored under `name` in `directory`.
     ///
     /// @return whether there was one
-    public static boolean delete(Path directory, String name) {
+    public static boolean delete(Path directory, String name, byte kind) {
         try {
-            var deleted = Files.deleteIfExists(directory.resolve(name + SUFFIX));
+            var deleted = Files.deleteIfExists(directory.resolve(name + suffix(kind)));
             if (deleted) {
                 PrivateFiles.forceDirectory(directory);
             }
@@ -89,14 +95,15 @@ public final class SecretFiles {
         }
     }
 
-    /// {@return the names of the secrets stored in `directory`}
-    public static List<String> names(Path directory) {
+    /// {@return the names of the secrets of `kind` stored in `directory`}
+    public static List<String> names(Path directory, byte kind) {
+        var suffix = suffix(kind);
         var names = new ArrayList<String>();
         try (var files = Files.list(directory)) {
             for (var file : (Iterable<Path>) files::iterator) {
                 var fileName = file.getFileName().toString();
-                if (fileName.endsWith(SUFFIX)) {
-                    var name = fileName.substring(0, fileName.length() - SUFFIX.length());
+                if (fileName.endsWith(suffix)) {
+                    var name = fileName.substring(0, fileName.length() - suffix.length());
                     if (Names.isName(name)) {
                         names.add(name);
                     }

@@ -29,16 +29,29 @@ empty keyring elsewhere.
 A coffer only touches the secrets its namespace created. `readOrCreate` creates a secret once, even when threads and
 processes race for it.
 
+`moveTo(backend)` moves a namespace's secrets, for instance from files to the system's keyring once one is available.
+It copies them, records the new backend, then deletes the old copies; a move cut short is finished by the next coffer
+of the namespace, and coffers that other processes opened before the move refuse to write after it.
+
+## Asking the user
+
+By default a coffer never waits on the user: an operation that needs a locked keyring unlocked, or the user's consent,
+fails with `LOCKED`. `Coffer.builder(namespace).interactive(timeout)` lets it ask. The Secret Service's prompt is
+bounded by `timeout`; the macOS Keychain's dialog stays open as long as the user takes. On macOS a coffer that may not
+ask turns the keychain's user interaction off around each of its calls, the only switch the file-based keychain obeys,
+and that switch is process-wide.
+
 ## Native access
 
 The Windows and macOS backends call the operating system through the Foreign Function and Memory API, with bindings
 [jextract](https://github.com/openjdk/jextract) generates. Run applications that use them with
 `--enable-native-access=com.github.auties00.coffer` (or `ALL-UNNAMED` on the class path) to avoid the JDK's warning.
-The Secret Service backend speaks D-Bus in Java, with no native access; it reaches buses that listen on a socket path,
-as every systemd session's does, but not those that listen only on an abstract socket.
+The Secret Service backend speaks D-Bus in Java, and needs no native access for a bus that listens on a socket path,
+as every systemd session's does; a bus that listens only on a Linux abstract socket, as `dbus-daemon` does on
+distributions without systemd's user bus, is reached through libc, which needs it.
 
 ## Building
 
-Java 26 and Maven: `mvn verify`. The bindings under `backend/windows/ffm` and `backend/macos/ffm` are generated from
-`bindings/` by the `Bindings` workflow, on Windows and macOS runners, and committed; run it after changing a header or
-an argument file.
+Java 26 and Maven: `mvn verify`. The bindings under `backend/windows/ffm`, `backend/macos/ffm` and `backend/dbus/ffm`
+are generated from `bindings/` by the `Bindings` workflow, on Windows, macOS and Linux runners, and committed; run it
+after changing a header or an argument file.

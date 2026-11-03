@@ -30,6 +30,7 @@ import java.util.Optional;
 /// The first time a namespace stores a secret, its backend is recorded in the namespace's directory, and every later
 /// coffer of the namespace uses that backend: if it cannot be reached, opening fails rather than start an empty
 /// keyring elsewhere, where a secret the application creates anew would replace the one it lost track of.
+/// [#moveTo(Backend)] moves the secrets, and the record, to another backend.
 ///
 /// # Threading
 /// Every method may be called from any thread, virtual threads included. [#readOrCreate(String, int)] creates a
@@ -116,6 +117,22 @@ public sealed interface Coffer extends AutoCloseable permits LiveCoffer {
     /// @throws CofferException if the keyring cannot be read
     List<String> names();
 
+    /// Moves every secret to `backend`, which the namespace uses from then on, and closes this coffer.
+    ///
+    /// The secrets are copied first, then the namespace's record names `backend`, then the copies left in this
+    /// coffer's backend are deleted. A move cut short before the record changes leaves the namespace where it was; one
+    /// cut short after leaves copies behind, which the next coffer of the namespace deletes as it opens, once the old
+    /// backend can be reached. A coffer of the namespace that another process holds refuses to write after the move.
+    ///
+    /// @apiNote Moving from [Backend#FILE] to the operating system's keyring, once it becomes available, stops keeping
+    /// the secrets in files only file permissions protect.
+    /// @param backend the backend to move to
+    /// @return the coffer of `backend`, or this coffer if it is already in `backend`
+    /// @throws CofferException with [CofferException.Reason#UNAVAILABLE] if `backend` cannot be reached, or another
+    ///                        process moved the secrets already; with another reason if a secret cannot be copied,
+    ///                        which leaves the namespace where it was
+    Coffer moveTo(Backend backend);
+
     /// Releases the connection to the keyring's service, if there is one; closing a closed coffer does nothing.
     @Override
     void close();
@@ -143,12 +160,17 @@ public sealed interface Coffer extends AutoCloseable permits LiveCoffer {
         /// @return this builder
         Builder directory(Path directory);
 
-        /// Lets an operation that finds the keyring locked ask the user to unlock it, and wait at most `timeout` for
-        /// the answer.
+        /// Lets an operation that needs the user, to unlock the keyring or to allow access to a secret, ask them, and
+        /// wait at most `timeout` for the answer.
         ///
-        /// By default an operation never waits on the user: one that finds the keyring locked throws
-        /// [CofferException] with [CofferException.Reason#LOCKED]. It applies to [Backend#SECRET_SERVICE]: the Windows
-        /// Data Protection API never asks, and the macOS Keychain asks for its password on its own when it is locked.
+        /// By default an operation never waits on the user: one that would have to ask throws [CofferException] with
+        /// [CofferException.Reason#LOCKED]. The Windows Data Protection API never asks. The macOS Keychain shows its
+        /// own dialog, and keeps it open for as long as the user takes: `timeout` bounds the wait on the Secret
+        /// Service only.
+        ///
+        /// @implNote On macOS a coffer that may not ask turns the keychain's user interaction off for each of its
+        /// calls, since the file-based keychain obeys no per-call flag. The switch is process-wide: while a call runs,
+        /// other code of the process that uses the keychain may see interaction refused too.
         ///
         /// @param timeout the longest wait for the user, positive
         /// @return this builder

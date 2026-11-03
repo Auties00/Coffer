@@ -59,8 +59,14 @@ class CofferTest {
     }
 
     private Coffer openPlatform(Path directory) {
+        return openPlatform(directory, namespace());
+    }
+
+    private Coffer openPlatform(Path directory, String namespace) {
         try {
-            return open(directory, platformBackend());
+            var coffer = Coffer.builder(namespace).directory(directory).backends(platformBackend()).build();
+            opened.add(coffer);
+            return coffer;
         } catch (CofferException exception) {
             if (exception.reason() == CofferException.Reason.UNAVAILABLE && !"true".equals(System.getenv("COFFER_REQUIRE_KEYRING"))) {
                 org.junit.jupiter.api.Assumptions.abort(platformBackend() + " is not available here: " + exception.getMessage());
@@ -208,6 +214,107 @@ class CofferTest {
     }
 
     @Nested
+    @DisplayName("moving a namespace")
+    class Moving {
+        private Coffer track(Coffer coffer) {
+            opened.add(coffer);
+            return coffer;
+        }
+
+        private Coffer fileCoffer(String namespace, Path directory) {
+            return track(Coffer.builder(namespace).directory(directory).backends(Backend.FILE, platformBackend()).build());
+        }
+
+        private Coffer moveToPlatform(Coffer coffer) {
+            try {
+                return track(coffer.moveTo(platformBackend()));
+            } catch (CofferException exception) {
+                if (exception.reason() == CofferException.Reason.UNAVAILABLE && !"true".equals(System.getenv("COFFER_REQUIRE_KEYRING"))) {
+                    org.junit.jupiter.api.Assumptions.abort(platformBackend() + " is not available here: " + exception.getMessage());
+                }
+                throw exception;
+            }
+        }
+
+        @Test
+        @DisplayName("takes every secret to the system's keyring and back, leaving no copy behind")
+        void roundTrip(@TempDir Path directory, @TempDir Path elsewhere) throws IOException {
+            var namespace = namespace();
+            var file = fileCoffer(namespace, directory);
+            file.write("first", new byte[]{1});
+            file.write("second", new byte[]{2, 2});
+            var platform = moveToPlatform(file);
+            assertEquals(platformBackend(), platform.backend());
+            assertThrows(IllegalStateException.class, () -> file.read("first"));
+            assertEquals(List.of("first", "second"), platform.names());
+            assertArrayEquals(new byte[]{2, 2}, platform.read("second").orElseThrow());
+            assertFalse(Files.exists(directory.resolve("first.secret")));
+            assertEquals(platformBackend().name() + "\n", Files.readString(directory.resolve("backend")));
+            try (var reopened = Coffer.builder(namespace).directory(directory).build()) {
+                assertEquals(platformBackend(), reopened.backend());
+            }
+
+            var back = track(platform.moveTo(Backend.FILE));
+            assertEquals(Backend.FILE, back.backend());
+            assertEquals(List.of("first", "second"), back.names());
+            assertArrayEquals(new byte[]{1}, back.read("first").orElseThrow());
+            assertFalse(Files.exists(directory.resolve("first.sealed")));
+            try (var empty = Coffer.builder(namespace).directory(elsewhere).backends(platformBackend()).build()) {
+                assertEquals(List.of(), empty.names());
+            }
+        }
+
+        @Test
+        @DisplayName("a move cut short after its record changed is finished by the next coffer")
+        void resumed(@TempDir Path directory) throws IOException {
+            var namespace = namespace();
+            var file = fileCoffer(namespace, directory);
+            file.write("key", new byte[]{7});
+            moveToPlatform(file).close();
+            // What a move cut short leaves: a record that names both backends, and the copy in the old one
+            var content = new byte[]{'C', 'O', 'F', 'F', 'E', 'R', 1, 0, 7};
+            Files.write(directory.resolve("key.secret"), content);
+            Files.writeString(directory.resolve("backend"), platformBackend().name() + "\nfrom FILE\n");
+
+            var resumed = track(Coffer.builder(namespace).directory(directory).build());
+            assertEquals(platformBackend(), resumed.backend());
+            assertFalse(Files.exists(directory.resolve("key.secret")));
+            assertEquals(platformBackend().name() + "\n", Files.readString(directory.resolve("backend")));
+            assertArrayEquals(new byte[]{7}, resumed.read("key").orElseThrow());
+        }
+
+        @Test
+        @DisplayName("copies a move cut short before its record changed are not brought back")
+        void staleCopies(@TempDir Path directory, @TempDir Path elsewhere) throws IOException {
+            var namespace = namespace();
+            var file = fileCoffer(namespace, directory);
+            file.write("key", new byte[]{1});
+            // A copy in the keyring that no record names, as an earlier move would leave it
+            var stale = openPlatform(elsewhere, namespace);
+            stale.write("ghost", new byte[]{9});
+            if (Platform.current() == Platform.WINDOWS) {
+                Files.copy(elsewhere.resolve("ghost.sealed"), directory.resolve("ghost.sealed"));
+            }
+
+            var platform = moveToPlatform(file);
+            assertEquals(List.of("key"), platform.names());
+        }
+
+        @Test
+        @DisplayName("a coffer opened before the move refuses to write after it")
+        void staleCoffer(@TempDir Path directory) {
+            var namespace = namespace();
+            var first = fileCoffer(namespace, directory);
+            first.write("key", new byte[]{1});
+            var before = fileCoffer(namespace, directory);
+            var platform = moveToPlatform(first);
+            var refused = assertThrows(CofferException.class, () -> before.write("key", new byte[]{2}));
+            assertEquals(CofferException.Reason.UNAVAILABLE, refused.reason());
+            assertArrayEquals(new byte[]{1}, platform.read("key").orElseThrow());
+        }
+    }
+
+    @Nested
     @DisplayName("refusals")
     class Refusals {
         @ParameterizedTest
@@ -238,7 +345,7 @@ class CofferTest {
         void boundToName(@TempDir Path directory) throws IOException {
             var coffer = open(directory, Backend.WINDOWS_DATA_PROTECTION);
             coffer.write("original", new byte[]{1, 2, 3});
-            Files.copy(directory.resolve("original.secret"), directory.resolve("copy.secret"));
+            Files.copy(directory.resolve("original.sealed"), directory.resolve("copy.sealed"));
             var failure = assertThrows(CofferException.class, () -> coffer.read("copy"));
             assertEquals(CofferException.Reason.CORRUPTED, failure.reason());
         }

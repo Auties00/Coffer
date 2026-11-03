@@ -1,20 +1,12 @@
 package com.github.auties00.coffer.backend.dbus;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.SocketTimeoutException;
-import java.net.StandardProtocolFamily;
-import java.net.UnixDomainSocketAddress;
-import java.nio.ByteBuffer;
-import java.nio.channels.SelectionKey;
-import java.nio.channels.Selector;
-import java.nio.channels.SocketChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayDeque;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
@@ -23,8 +15,8 @@ import java.util.function.Predicate;
 /// A connection to the D-Bus session bus, over its Unix domain socket, in Java.
 ///
 /// It authenticates with the `EXTERNAL` mechanism, as the user that owns the process, and sends one call at a time:
-/// [#call] waits for the reply, keeping the signals that arrive meanwhile for [#awaitSignal]. A bus listening only on
-/// an abstract socket cannot be reached, since the JDK names Unix sockets by path.
+/// [#call] waits for the reply, keeping the signals that arrive meanwhile for [#awaitSignal]. A bus named by a path is
+/// reached through the JDK's socket channels; one listening on a Linux abstract socket only, through the C library.
 ///
 /// It is safe for concurrent use; calls are serialized.
 ///
@@ -36,15 +28,13 @@ public final class DBusConnection implements AutoCloseable {
     private static final Duration CALL_TIMEOUT = Duration.ofSeconds(25);
     private static final int MAX_SIGNALS = 256;
 
-    private final SocketChannel channel;
-    private final Selector selector;
+    private final DBusTransport transport;
     private final Object lock;
     private final ArrayDeque<DBusMessage> signals;
     private int serial;
 
-    private DBusConnection(SocketChannel channel, Selector selector) {
-        this.channel = channel;
-        this.selector = selector;
+    private DBusConnection(DBusTransport transport) {
+        this.transport = transport;
         this.lock = new Object();
         this.signals = new ArrayDeque<>();
     }
@@ -53,10 +43,29 @@ public final class DBusConnection implements AutoCloseable {
     ///
     /// @throws IOException if no address names a reachable bus
     public static DBusConnection openSessionBus() throws IOException {
-        var addresses = sessionAddresses();
-        if (addresses.isEmpty()) {
-            throw new IOException("No D-Bus session bus address: DBUS_SESSION_BUS_ADDRESS and XDG_RUNTIME_DIR are unset, or name abstract sockets only");
+        var variable = System.getenv("DBUS_SESSION_BUS_ADDRESS");
+        if (variable != null && !variable.isBlank()) {
+            return open(variable);
         }
+        var runtime = System.getenv("XDG_RUNTIME_DIR");
+        if (runtime == null || runtime.isBlank()) {
+            throw new IOException("No D-Bus session bus address: DBUS_SESSION_BUS_ADDRESS and XDG_RUNTIME_DIR are unset");
+        }
+        return open(List.of(new DBusAddress.UnixPath(Path.of(runtime, "bus"))));
+    }
+
+    /// {@return a connection to the first bus of `addresses`, a D-Bus address list, that can be reached}
+    ///
+    /// @throws IOException if no address names a reachable bus
+    static DBusConnection open(String addresses) throws IOException {
+        var parsed = DBusAddress.parse(addresses);
+        if (parsed.isEmpty()) {
+            throw new IOException("The D-Bus address names no Unix socket to connect to: " + addresses);
+        }
+        return open(parsed);
+    }
+
+    private static DBusConnection open(List<DBusAddress> addresses) throws IOException {
         IOException failure = null;
         for (var address : addresses) {
             try {
@@ -72,64 +81,14 @@ public final class DBusConnection implements AutoCloseable {
         throw failure;
     }
 
-    /// {@return the socket paths of the session bus addresses}
-    static List<Path> sessionAddresses() {
-        var paths = new ArrayList<Path>();
-        var variable = System.getenv("DBUS_SESSION_BUS_ADDRESS");
-        if (variable != null && !variable.isBlank()) {
-            for (var address : variable.split(";")) {
-                if (!address.startsWith("unix:")) {
-                    continue;
-                }
-                for (var parameter : address.substring(5).split(",")) {
-                    var separator = parameter.indexOf('=');
-                    if (separator > 0 && parameter.substring(0, separator).equals("path")) {
-                        paths.add(Path.of(unescape(parameter.substring(separator + 1))));
-                    }
-                }
-            }
-            return paths;
-        }
-        var runtime = System.getenv("XDG_RUNTIME_DIR");
-        if (runtime != null && !runtime.isBlank()) {
-            paths.add(Path.of(runtime, "bus"));
-        }
-        return paths;
-    }
-
-    /// {@return `value` with the `%xx` escapes of a D-Bus address undone}
-    static String unescape(String value) {
-        var bytes = new ByteArrayOutputStream();
-        for (var i = 0; i < value.length(); i++) {
-            var c = value.charAt(i);
-            if (c == '%' && i + 2 < value.length()) {
-                bytes.write(HexFormat.fromHexDigits(value, i + 1, i + 3));
-                i += 2;
-            } else {
-                bytes.write(c);
-            }
-        }
-        return bytes.toString(StandardCharsets.UTF_8);
-    }
-
-    private static DBusConnection open(Path path) throws IOException {
-        var channel = SocketChannel.open(StandardProtocolFamily.UNIX);
+    private static DBusConnection open(DBusAddress address) throws IOException {
+        var connection = new DBusConnection(DBusTransport.connect(address));
         try {
-            channel.connect(UnixDomainSocketAddress.of(path));
-            channel.configureBlocking(false);
-            var selector = Selector.open();
-            var connection = new DBusConnection(channel, selector);
-            try {
-                channel.register(selector, SelectionKey.OP_READ);
-                connection.authenticate();
-                connection.call(BUS, BUS_PATH, BUS, "Hello", "");
-                return connection;
-            } catch (IOException | RuntimeException exception) {
-                connection.close();
-                throw exception;
-            }
+            connection.authenticate();
+            connection.call(BUS, BUS_PATH, BUS, "Hello", "");
+            return connection;
         } catch (IOException | RuntimeException exception) {
-            channel.close();
+            connection.close();
             throw exception;
         }
     }
@@ -263,43 +222,18 @@ public final class DBusConnection implements AutoCloseable {
     }
 
     private void receiveFully(byte[] target, int offset, int length, long deadline) throws IOException {
-        var buffer = ByteBuffer.wrap(target, offset, length);
-        while (buffer.hasRemaining()) {
-            var read = channel.read(buffer);
-            if (read < 0) {
-                throw new IOException("The D-Bus session bus closed the connection");
-            }
-            if (read == 0) {
-                waitFor(SelectionKey.OP_READ, deadline);
-            }
-        }
+        transport.readFully(target, offset, length, deadline);
     }
 
     private void send(byte[] message, long deadline) throws IOException {
-        var buffer = ByteBuffer.wrap(message);
-        while (buffer.hasRemaining()) {
-            if (channel.write(buffer) == 0) {
-                waitFor(SelectionKey.OP_WRITE, deadline);
-            }
-        }
+        transport.writeFully(message, deadline);
     }
 
-    private void waitFor(int operation, long deadline) throws IOException {
-        var key = channel.keyFor(selector);
-        key.interestOps(operation);
-        var remaining = deadline - System.nanoTime();
-        if (remaining <= 0 || selector.select(Math.max(1, remaining / 1_000_000)) == 0 && System.nanoTime() >= deadline) {
-            throw new SocketTimeoutException("The D-Bus session bus did not answer in time");
-        }
-        selector.selectedKeys().clear();
-    }
-
+    /// Closes the connection, once the call in progress, if any, has returned.
     @Override
     public void close() throws IOException {
-        try {
-            selector.close();
-        } finally {
-            channel.close();
+        synchronized (lock) {
+            transport.close();
         }
     }
 }

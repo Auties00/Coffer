@@ -75,19 +75,24 @@ public final class CofferBuilder implements Coffer.Builder {
         } catch (IOException exception) {
             throw new CofferException(CofferException.Reason.IO, "The directory of " + namespace + " could not be created: " + root, exception);
         }
-        var recorded = LiveCoffer.recordedBackend(root);
+        LiveCoffer.Opener opener = backend -> open(backend, root);
+        var recorded = LiveCoffer.readRecord(root);
         if (recorded != null) {
-            if (!backends.contains(recorded)) {
+            if (!backends.contains(recorded.backend())) {
                 throw new CofferException(CofferException.Reason.UNAVAILABLE,
-                        "The secrets of " + namespace + " are in " + recorded + ", which the coffer may not use", null);
+                        "The secrets of " + namespace + " are in " + recorded.backend() + ", which the coffer may not use", null);
             }
             // The secrets are there: no other backend may stand in for it
-            return new LiveCoffer(namespace, recorded, open(recorded, root), root, true);
+            var coffer = new LiveCoffer(namespace, recorded.backend(), open(recorded.backend(), root), root, opener);
+            if (recorded.leaving() != null) {
+                coffer.finishMove(recorded.leaving());
+            }
+            return coffer;
         }
         var failures = new ArrayList<CofferException>();
         for (var backend : backends) {
             try {
-                return new LiveCoffer(namespace, backend, open(backend, root), root, false);
+                return new LiveCoffer(namespace, backend, open(backend, root), root, opener);
             } catch (CofferException exception) {
                 if (exception.reason() != CofferException.Reason.UNAVAILABLE) {
                     throw exception;
@@ -117,7 +122,7 @@ public final class CofferBuilder implements Coffer.Builder {
                 if (platform != Platform.MACOS) {
                     throw unavailable(backend);
                 }
-                yield new KeychainVault(namespace);
+                yield new KeychainVault(namespace, interactive != null);
             }
             case SECRET_SERVICE -> {
                 if (platform != Platform.UNIX) {

@@ -24,11 +24,11 @@ final class FileVault implements Vault {
 
     @Override
     public boolean delete(String name) {
-        return SecretFiles.delete(directory, name);
+        return SecretFiles.delete(directory, name, SecretFiles.PLAIN);
     }
 
     @Override
     public List<String> names() {
-        return SecretFiles.names(directory);
+        return SecretFiles.names(directory, SecretFiles.PLAIN);
     }
 }

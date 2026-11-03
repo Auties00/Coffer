@@ -102,3 +102,7 @@ CFDictionaryCopyDescriptionCallBack
 CFDictionaryEqualCallBack
 --include-typedef
 CFDictionaryHashCallBack
+--include-function
+SecKeychainGetUserInteractionAllowed
+--include-function
+SecKeychainSetUserInteractionAllowed
