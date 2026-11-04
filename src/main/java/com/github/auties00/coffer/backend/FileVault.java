@@ -1,5 +1,6 @@
 package com.github.auties00.coffer.backend;
 
+import java.lang.foreign.MemorySegment;
 import java.nio.file.Path;
 import java.util.List;
 
@@ -13,12 +14,12 @@ final class FileVault implements Vault {
     }
 
     @Override
-    public byte[] read(String name) {
+    public LiveSecret read(String name) {
         return SecretFiles.read(directory, name, SecretFiles.PLAIN);
     }
 
     @Override
-    public void write(String name, byte[] secret) {
+    public void write(String name, MemorySegment secret) {
         SecretFiles.write(directory, name, SecretFiles.PLAIN, secret);
     }
 

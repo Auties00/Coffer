@@ -122,7 +122,7 @@ final class SecretSession {
         return path;
     }
 
-    /// {@return the `(oayays)` secret struct that carries `secret`}
+    /// {@return the `(oayays)` secret struct that carries `secret`, its value a new array the caller erases}
     Object[] seal(byte[] secret) {
         if (key == null) {
             return new Object[]{path, new byte[0], secret.clone(), CONTENT_TYPE};
@@ -138,7 +138,7 @@ final class SecretSession {
         }
     }
 
-    /// {@return the secret carried by the `parameters` and `value` of a secret struct}
+    /// {@return the secret carried by the `parameters` and `value` of a secret struct, in a new array the caller erases}
     ///
     /// @throws IllegalArgumentException if they do not decrypt
     byte[] open(byte[] parameters, byte[] value) {

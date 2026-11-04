@@ -12,7 +12,9 @@ public final class CofferChild {
 
     public static void main(String[] arguments) {
         try (var coffer = Coffer.builder(arguments[0]).directory(Path.of(arguments[1])).backends(Backend.valueOf(arguments[2])).build()) {
-            System.out.println(HexFormat.of().formatHex(coffer.readOrCreate("shared", 32)));
+            try (var secret = coffer.readOrCreate("shared", 32)) {
+                System.out.println(HexFormat.of().formatHex(secret.toByteArray()));
+            }
         }
     }
 }

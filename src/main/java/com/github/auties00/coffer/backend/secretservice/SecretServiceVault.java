@@ -1,6 +1,7 @@
 package com.github.auties00.coffer.backend.secretservice;
 
 import com.github.auties00.coffer.CofferException;
+import com.github.auties00.coffer.backend.LiveSecret;
 import com.github.auties00.coffer.backend.Vault;
 import com.github.auties00.coffer.backend.dbus.DBusConnection;
 import com.github.auties00.coffer.backend.dbus.DBusErrorException;
@@ -9,10 +10,13 @@ import com.github.auties00.coffer.backend.dbus.ObjectPath;
 import com.github.auties00.coffer.backend.dbus.Variant;
 
 import java.io.IOException;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.net.SocketTimeoutException;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -103,7 +107,7 @@ public final class SecretServiceVault implements Vault {
     }
 
     @Override
-    public byte[] read(String name) {
+    public LiveSecret read(String name) {
         lock.lock();
         try {
             var items = search(attributes(name));
@@ -112,14 +116,30 @@ public final class SecretServiceVault implements Vault {
             }
             var item = items.getFirst();
             unlock(List.of(item));
-            var reply = bus.call(SERVICE, SERVICE_PATH, SERVICE_INTERFACE, "GetSecrets", "aoo", List.of(item), session.path()).arguments();
-            var secrets = (Map<?, ?>) reply[0];
-            var secret = (Object[]) secrets.get(item);
-            if (secret == null) {
-                // Deleted since the search
-                return null;
+            var reply = bus.call(SERVICE, SERVICE_PATH, SERVICE_INTERFACE, "GetSecrets", "aoo", List.of(item), session.path());
+            byte[] value = null;
+            try {
+                var secrets = (Map<?, ?>) reply.arguments()[0];
+                var secret = (Object[]) secrets.get(item);
+                if (secret == null) {
+                    // Deleted since the search
+                    return null;
+                }
+                value = (byte[]) secret[2];
+                // The cipher works on arrays: the plaintext is on the heap until it is copied out
+                var plaintext = session.open((byte[]) secret[1], value);
+                try {
+                    return LiveSecret.copyOf(plaintext);
+                } finally {
+                    Arrays.fill(plaintext, (byte) 0);
+                }
+            } finally {
+                // The reply carries the secret encrypted, or in the clear in a plain session
+                Arrays.fill(reply.body(), (byte) 0);
+                if (value != null) {
+                    Arrays.fill(value, (byte) 0);
+                }
             }
-            return session.open((byte[]) secret[1], (byte[]) secret[2]);
         } catch (IOException exception) {
             throw failure("read the secret " + name, exception);
         } catch (IllegalArgumentException exception) {
@@ -130,14 +150,18 @@ public final class SecretServiceVault implements Vault {
     }
 
     @Override
-    public void write(String name, byte[] secret) {
+    public void write(String name, MemorySegment secret) {
         lock.lock();
+        // The cipher works on arrays: the plaintext and what carries it are on the heap until the call is sent
+        var plaintext = secret.toArray(ValueLayout.JAVA_BYTE);
+        Object[] sealed = null;
         try {
+            sealed = session.seal(plaintext);
             var items = search(attributes(name));
             if (!items.isEmpty()) {
                 var item = items.getFirst();
                 unlock(List.of(item));
-                bus.call(SERVICE, item, ITEM_INTERFACE, "SetSecret", "(oayays)", (Object) session.seal(secret));
+                bus.call(SERVICE, item, ITEM_INTERFACE, "SetSecret", "(oayays)", (Object) sealed);
                 for (var duplicate : items.subList(1, items.size())) {
                     deleteItem(duplicate);
                 }
@@ -149,11 +173,15 @@ public final class SecretServiceVault implements Vault {
             properties.put("org.freedesktop.Secret.Item.Label", new Variant("s", "coffer/" + namespace + "/" + name));
             properties.put("org.freedesktop.Secret.Item.Attributes", new Variant("a{ss}", attributes(name)));
             var reply = bus.call(SERVICE, collection, COLLECTION_INTERFACE, "CreateItem", "a{sv}(oayays)b",
-                    properties, session.seal(secret), true).arguments();
+                    properties, sealed, true).arguments();
             prompt((ObjectPath) reply[1]);
         } catch (IOException exception) {
             throw failure("write the secret " + name, exception);
         } finally {
+            Arrays.fill(plaintext, (byte) 0);
+            if (sealed != null) {
+                Arrays.fill((byte[]) sealed[2], (byte) 0);
+            }
             lock.unlock();
         }
     }

@@ -53,11 +53,15 @@ public record DBusMessage(int type, int flags, int serial, Map<Integer, Object> 
             fields.put(DESTINATION, destination);
         }
         var body = new DBusWriter();
-        if (!signature.isEmpty()) {
-            fields.put(SIGNATURE, signature);
-            body.writeAll(signature, arguments);
+        try {
+            if (!signature.isEmpty()) {
+                fields.put(SIGNATURE, signature);
+                body.writeAll(signature, arguments);
+            }
+            return new DBusMessage(METHOD_CALL, 0, 0, fields, body.toByteArray(), ByteOrder.LITTLE_ENDIAN);
+        } finally {
+            body.erase();
         }
-        return new DBusMessage(METHOD_CALL, 0, 0, fields, body.toByteArray(), ByteOrder.LITTLE_ENDIAN);
     }
 
     /// {@return this message, little-endian, under `serial`}

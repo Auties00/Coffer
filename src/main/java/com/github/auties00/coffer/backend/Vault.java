@@ -5,17 +5,21 @@ import com.github.auties00.coffer.backend.macos.KeychainVault;
 import com.github.auties00.coffer.backend.secretservice.SecretServiceVault;
 import com.github.auties00.coffer.backend.windows.DataProtectionVault;
 
+import java.lang.foreign.MemorySegment;
 import java.util.List;
 
 /// The secrets of one namespace in one backend.
 ///
-/// Names reach a vault validated. Every method may throw [CofferException].
+/// Names reach a vault validated. Every method may throw [CofferException]. A vault erases every copy of a secret it
+/// makes in memory it controls; the copies the operating system's keyring makes are its own.
 public sealed interface Vault extends AutoCloseable permits FileVault, DataProtectionVault, KeychainVault, SecretServiceVault {
-    /// {@return a copy of the secret stored under `name`, or `null` if there is none}
-    byte[] read(String name);
+    /// {@return the secret stored under `name`, which the caller destroys, or `null` if there is none}
+    LiveSecret read(String name);
 
-    /// Stores `secret` under `name`, replacing what was stored under it.
-    void write(String name, byte[] secret);
+    /// Stores the bytes of `secret` under `name`, replacing what was stored under it.
+    ///
+    /// @param secret the bytes, which the vault reads and never keeps
+    void write(String name, MemorySegment secret);
 
     /// Deletes the secret stored under `name`.
     ///

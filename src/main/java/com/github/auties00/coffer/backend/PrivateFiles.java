@@ -72,6 +72,13 @@ public final class PrivateFiles {
     ///
     /// The content is forced to the device before it takes the file's name, and the directory after.
     public static void write(Path file, byte[] content) throws IOException {
+        write(file, ByteBuffer.wrap(content));
+    }
+
+    /// Replaces `file` with the remaining bytes of `contents`, in order, atomically, as [#write(Path, byte\[\])] does.
+    ///
+    /// A direct buffer, such as the view of native memory, is written without a copy on the heap.
+    public static void write(Path file, ByteBuffer... contents) throws IOException {
         var directory = file.toAbsolutePath().getParent();
         var temporary = posix(directory)
                 ? Files.createTempFile(directory, ".coffer", ".tmp", PosixFilePermissions.asFileAttribute(PRIVATE_FILE))
@@ -81,9 +88,10 @@ public final class PrivateFiles {
                 restrict(temporary, false);
             }
             try (var channel = FileChannel.open(temporary, StandardOpenOption.WRITE)) {
-                var buffer = ByteBuffer.wrap(content);
-                while (buffer.hasRemaining()) {
-                    channel.write(buffer);
+                for (var content : contents) {
+                    while (content.hasRemaining()) {
+                        channel.write(content);
+                    }
                 }
                 channel.force(true);
             }

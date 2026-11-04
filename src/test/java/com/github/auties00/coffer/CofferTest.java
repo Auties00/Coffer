@@ -75,6 +75,19 @@ class CofferTest {
         }
     }
 
+    /// The bytes of a secret that must be there, which the call closes.
+    private static byte[] bytes(Optional<Secret> secret) {
+        try (var present = secret.orElseThrow()) {
+            return present.toByteArray();
+        }
+    }
+
+    private static String hex(Secret secret) {
+        try (secret) {
+            return HexFormat.of().formatHex(secret.toByteArray());
+        }
+    }
+
     @AfterEach
     void cleanUp() {
         for (var coffer : opened) {
@@ -105,10 +118,12 @@ class CofferTest {
             assertEquals(Optional.empty(), coffer.read("token"));
             coffer.write("token", "first".getBytes(StandardCharsets.UTF_8));
             coffer.write("other", new byte[0]);
-            assertArrayEquals("first".getBytes(StandardCharsets.UTF_8), coffer.read("token").orElseThrow());
-            coffer.write("token", "second".getBytes(StandardCharsets.UTF_8));
-            assertArrayEquals("second".getBytes(StandardCharsets.UTF_8), coffer.read("token").orElseThrow());
-            assertArrayEquals(new byte[0], coffer.read("other").orElseThrow());
+            assertArrayEquals("first".getBytes(StandardCharsets.UTF_8), bytes(coffer.read("token")));
+            try (var second = Secret.copyOf("second".getBytes(StandardCharsets.UTF_8))) {
+                coffer.write("token", second);
+            }
+            assertArrayEquals("second".getBytes(StandardCharsets.UTF_8), bytes(coffer.read("token")));
+            assertArrayEquals(new byte[0], bytes(coffer.read("other")));
             assertEquals(List.of("other", "token"), coffer.names());
             assertTrue(coffer.delete("token"));
             assertFalse(coffer.delete("token"));
@@ -124,7 +139,7 @@ class CofferTest {
             var secret = new byte[Coffer.MAX_LENGTH];
             new java.util.Random(1).nextBytes(secret);
             coffer.write("large", secret);
-            assertArrayEquals(secret, coffer.read("large").orElseThrow());
+            assertArrayEquals(secret, bytes(coffer.read("large")));
         }
 
         @ParameterizedTest(name = "keyring of the system: {0}")
@@ -135,7 +150,7 @@ class CofferTest {
             var results = new ArrayList<java.util.concurrent.Future<String>>();
             try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
                 for (var i = 0; i < 16; i++) {
-                    results.add(executor.submit((Callable<String>) () -> HexFormat.of().formatHex(coffer.readOrCreate("key", 32))));
+                    results.add(executor.submit((Callable<String>) () -> hex(coffer.readOrCreate("key", 32))));
                 }
             }
             var values = new HashSet<String>();
@@ -185,7 +200,7 @@ class CofferTest {
             }
             try (var reopened = Coffer.builder(namespace).directory(directory).backends(platformBackend(), Backend.FILE).build()) {
                 assertEquals(Backend.FILE, reopened.backend());
-                assertArrayEquals(new byte[]{1}, reopened.read("key").orElseThrow());
+                assertArrayEquals(new byte[]{1}, bytes(reopened.read("key")));
                 reopened.delete("key");
             }
         }
@@ -247,7 +262,7 @@ class CofferTest {
             assertEquals(platformBackend(), platform.backend());
             assertThrows(IllegalStateException.class, () -> file.read("first"));
             assertEquals(List.of("first", "second"), platform.names());
-            assertArrayEquals(new byte[]{2, 2}, platform.read("second").orElseThrow());
+            assertArrayEquals(new byte[]{2, 2}, bytes(platform.read("second")));
             assertFalse(Files.exists(directory.resolve("first.secret")));
             assertEquals(platformBackend().name() + "\n", Files.readString(directory.resolve("backend")));
             try (var reopened = Coffer.builder(namespace).directory(directory).build()) {
@@ -257,7 +272,7 @@ class CofferTest {
             var back = track(platform.moveTo(Backend.FILE));
             assertEquals(Backend.FILE, back.backend());
             assertEquals(List.of("first", "second"), back.names());
-            assertArrayEquals(new byte[]{1}, back.read("first").orElseThrow());
+            assertArrayEquals(new byte[]{1}, bytes(back.read("first")));
             assertFalse(Files.exists(directory.resolve("first.sealed")));
             try (var empty = Coffer.builder(namespace).directory(elsewhere).backends(platformBackend()).build()) {
                 assertEquals(List.of(), empty.names());
@@ -280,7 +295,7 @@ class CofferTest {
             assertEquals(platformBackend(), resumed.backend());
             assertFalse(Files.exists(directory.resolve("key.secret")));
             assertEquals(platformBackend().name() + "\n", Files.readString(directory.resolve("backend")));
-            assertArrayEquals(new byte[]{7}, resumed.read("key").orElseThrow());
+            assertArrayEquals(new byte[]{7}, bytes(resumed.read("key")));
         }
 
         @Test
@@ -310,7 +325,7 @@ class CofferTest {
             var platform = moveToPlatform(first);
             var refused = assertThrows(CofferException.class, () -> before.write("key", new byte[]{2}));
             assertEquals(CofferException.Reason.UNAVAILABLE, refused.reason());
-            assertArrayEquals(new byte[]{1}, platform.read("key").orElseThrow());
+            assertArrayEquals(new byte[]{1}, bytes(platform.read("key")));
         }
     }
 

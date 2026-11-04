@@ -2,6 +2,7 @@ package com.github.auties00.coffer.backend.windows;
 
 import com.github.auties00.coffer.CofferException;
 import com.github.auties00.coffer.backend.CapturedCall;
+import com.github.auties00.coffer.backend.LiveSecret;
 import com.github.auties00.coffer.backend.SecretFiles;
 import com.github.auties00.coffer.backend.Vault;
 import com.github.auties00.coffer.backend.windows.ffm.Win32;
@@ -36,14 +37,31 @@ public final class DataProtectionVault implements Vault {
     }
 
     @Override
-    public byte[] read(String name) {
-        var sealed = SecretFiles.read(directory, name, SecretFiles.DATA_PROTECTION);
-        return sealed == null ? null : unprotect(name, sealed);
+    public LiveSecret read(String name) {
+        try (var sealed = SecretFiles.read(directory, name, SecretFiles.DATA_PROTECTION)) {
+            return sealed == null ? null : unprotect(name, sealed.memory());
+        }
     }
 
     @Override
-    public void write(String name, byte[] secret) {
-        SecretFiles.write(directory, name, SecretFiles.DATA_PROTECTION, protect(name, secret));
+    public void write(String name, MemorySegment secret) {
+        try (var arena = Arena.ofConfined()) {
+            var output = _CRYPTOAPI_BLOB.allocate(arena);
+            var state = CapturedCall.state(arena);
+            var succeeded = (int) PROTECT.invoke(state, blob(arena, secret), MemorySegment.NULL,
+                    blob(arena, arena.allocateFrom(ValueLayout.JAVA_BYTE, entropy(name))), MemorySegment.NULL, MemorySegment.NULL,
+                    Win32.CRYPTPROTECT_UI_FORBIDDEN(), output);
+            if (succeeded == 0) {
+                throw new CofferException(CofferException.Reason.IO,
+                        "CryptProtectData could not seal the secret " + name + " (" + code(PROTECT.error(state)) + ")", null);
+            }
+            var sealed = data(output);
+            try {
+                SecretFiles.write(directory, name, SecretFiles.DATA_PROTECTION, sealed);
+            } finally {
+                release(sealed);
+            }
+        }
     }
 
     @Override
@@ -60,31 +78,11 @@ public final class DataProtectionVault implements Vault {
         return ("coffer/" + namespace + "/" + name).getBytes(StandardCharsets.US_ASCII);
     }
 
-    private byte[] protect(String name, byte[] secret) {
-        try (var arena = Arena.ofConfined()) {
-            var data = arena.allocateFrom(ValueLayout.JAVA_BYTE, secret);
-            try {
-                var output = _CRYPTOAPI_BLOB.allocate(arena);
-                var state = CapturedCall.state(arena);
-                var succeeded = (int) PROTECT.invoke(state, blob(arena, data), MemorySegment.NULL,
-                        blob(arena, arena.allocateFrom(ValueLayout.JAVA_BYTE, entropy(name))), MemorySegment.NULL, MemorySegment.NULL,
-                        Win32.CRYPTPROTECT_UI_FORBIDDEN(), output);
-                if (succeeded == 0) {
-                    throw new CofferException(CofferException.Reason.IO,
-                            "CryptProtectData could not seal the secret " + name + " (" + code(PROTECT.error(state)) + ")", null);
-                }
-                return take(output);
-            } finally {
-                data.fill((byte) 0);
-            }
-        }
-    }
-
-    private byte[] unprotect(String name, byte[] sealed) {
+    private LiveSecret unprotect(String name, MemorySegment sealed) {
         try (var arena = Arena.ofConfined()) {
             var output = _CRYPTOAPI_BLOB.allocate(arena);
             var state = CapturedCall.state(arena);
-            var succeeded = (int) UNPROTECT.invoke(state, blob(arena, arena.allocateFrom(ValueLayout.JAVA_BYTE, sealed)), MemorySegment.NULL,
+            var succeeded = (int) UNPROTECT.invoke(state, blob(arena, sealed), MemorySegment.NULL,
                     blob(arena, arena.allocateFrom(ValueLayout.JAVA_BYTE, entropy(name))), MemorySegment.NULL, MemorySegment.NULL,
                     Win32.CRYPTPROTECT_UI_FORBIDDEN(), output);
             if (succeeded == 0) {
@@ -100,7 +98,12 @@ public final class DataProtectionVault implements Vault {
                 }
                 throw new CofferException(CofferException.Reason.IO, "CryptUnprotectData could not open the secret " + name + " (" + code(error) + ")", null);
             }
-            return take(output);
+            var opened = data(output);
+            try {
+                return LiveSecret.copyOf(opened);
+            } finally {
+                release(opened);
+            }
         }
     }
 
@@ -115,15 +118,14 @@ public final class DataProtectionVault implements Vault {
         return blob;
     }
 
-    /// {@return the bytes of `blob`, which Windows allocated, after freeing them}
-    private static byte[] take(MemorySegment blob) {
-        var length = _CRYPTOAPI_BLOB.cbData(blob);
-        var data = _CRYPTOAPI_BLOB.pbData(blob).reinterpret(Integer.toUnsignedLong(length));
-        try {
-            return data.toArray(ValueLayout.JAVA_BYTE);
-        } finally {
-            data.fill((byte) 0);
-            Win32.LocalFree(data);
-        }
+    /// {@return the memory `blob` points to, which Windows allocated}
+    private static MemorySegment data(MemorySegment blob) {
+        return _CRYPTOAPI_BLOB.pbData(blob).reinterpret(Integer.toUnsignedLong(_CRYPTOAPI_BLOB.cbData(blob)));
+    }
+
+    /// Overwrites `data`, which Windows allocated, and frees it.
+    private static void release(MemorySegment data) {
+        data.fill((byte) 0);
+        Win32.LocalFree(data);
     }
 }

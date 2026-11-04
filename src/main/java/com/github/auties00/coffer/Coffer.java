@@ -15,9 +15,14 @@ import java.util.Optional;
 ///     if (coffer.protection() != Protection.OPERATING_SYSTEM) {
 ///         // Only file permissions keep other users out: warn, or refuse to go on
 ///     }
-///     var key = coffer.readOrCreate("store-key", 32);
+///     try (var key = coffer.readOrCreate("store-key", 32)) {
+///         var mac = Mac.getInstance("HmacSHA256");
+///         mac.init(key.asKey("HmacSHA256"));
+///     }
 /// }
 /// }
+///
+/// Secrets come and go as [Secret]s, which keep their bytes outside the Java heap and erase them when closed.
 ///
 /// # Namespaces and names
 /// A coffer belongs to a namespace, the name of the application, and holds secrets by name. Both are 1 to 64 (names
@@ -74,14 +79,23 @@ public sealed interface Coffer extends AutoCloseable permits LiveCoffer {
         return backend().protection();
     }
 
-    /// {@return a copy of the secret stored under `name`, or an empty optional if there is none}
-    ///
-    /// The caller owns the array, and should overwrite it once the secret is no longer needed.
+    /// {@return the secret stored under `name`, which the caller closes, or an empty optional if there is none}
     ///
     /// @param name the name of the secret
     /// @throws IllegalArgumentException if `name` is not valid
     /// @throws CofferException if the keyring cannot be read
-    Optional<byte[]> read(String name);
+    Optional<Secret> read(String name);
+
+    /// Stores `secret` under `name`, replacing the secret stored under it.
+    ///
+    /// The coffer reads `secret` and keeps no reference to it; the caller may close it once the method returns.
+    ///
+    /// @param name the name of the secret
+    /// @param secret the secret, at most [#MAX_LENGTH] bytes
+    /// @throws IllegalArgumentException if `name` is not valid, `secret` is longer than [#MAX_LENGTH], or `secret`
+    ///                                  is destroyed
+    /// @throws CofferException if the keyring cannot be written
+    void write(String name, Secret secret);
 
     /// Stores `secret` under `name`, replacing the secret stored under it.
     ///
@@ -99,10 +113,10 @@ public sealed interface Coffer extends AutoCloseable permits LiveCoffer {
     ///
     /// @param name the name of the secret
     /// @param length the bytes of a new secret, from 1 to [#MAX_LENGTH]
-    /// @return a copy of the secret, which the caller owns; a secret stored earlier keeps its own length
+    /// @return the secret, which the caller closes; a secret stored earlier keeps its own length
     /// @throws IllegalArgumentException if `name` is not valid, or `length` is out of range
     /// @throws CofferException if the keyring cannot be read or written
-    byte[] readOrCreate(String name, int length);
+    Secret readOrCreate(String name, int length);
 
     /// Deletes the secret stored under `name`.
     ///

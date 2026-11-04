@@ -143,7 +143,14 @@ public final class DBusConnection implements AutoCloseable {
         synchronized (lock) {
             var sent = ++serial;
             var deadline = System.nanoTime() + CALL_TIMEOUT.toNanos();
-            send(message.encode(sent), deadline);
+            var frame = message.encode(sent);
+            try {
+                send(frame, deadline);
+            } finally {
+                // A call may carry a secret, encrypted or in the clear
+                Arrays.fill(frame, (byte) 0);
+                Arrays.fill(message.body(), (byte) 0);
+            }
             while (true) {
                 var received = receive(deadline);
                 if ((received.type() == DBusMessage.METHOD_RETURN || received.type() == DBusMessage.ERROR) && received.replySerial() == sent) {

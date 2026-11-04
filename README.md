@@ -8,9 +8,27 @@ try (var coffer = Coffer.open("myapp")) {
     if (coffer.protection() != Protection.OPERATING_SYSTEM) {
         // Only file permissions keep other users out
     }
-    byte[] key = coffer.readOrCreate("database-key", 32);
+    try (var key = coffer.readOrCreate("database-key", 32)) {
+        var mac = Mac.getInstance("HmacSHA256");
+        mac.init(key.asKey("HmacSHA256"));
+    }
 }
 ```
+
+## Secrets in memory
+
+A coffer hands out a `Secret`, which keeps its bytes outside the Java heap, where the garbage collector never moves
+or copies them. Closing it, or `destroy()`, overwrites them with zeros and frees them; a secret left unclosed is erased
+once it becomes unreachable. `asKey(algorithm)` makes it a `SecretKey` for `Cipher`, `Mac` and the other cryptographic
+APIs, which destroying the secret destroys too and which refuses serialization. `toByteArray()` and `toCharArray()`
+(UTF-8, for passwords; `Secret.copyOf(char[])` stores one) are heap copies the caller owns, and `asSegment()` is a
+read-only view for native code.
+
+Inside Coffer, every copy of a secret in memory it controls is erased after use: the file and Windows backends move
+the bytes between native memory and the file or the operating system without a heap copy, and the D-Bus client erases
+its buffers. What Coffer cannot reach is noted where it happens: a cryptographic provider copies a key it is
+initialized with, the macOS Security framework and the Secret Service keep copies of their own, and the Secret
+Service's encryption runs through `javax.crypto`, whose buffers are on the heap.
 
 ## Backends
 

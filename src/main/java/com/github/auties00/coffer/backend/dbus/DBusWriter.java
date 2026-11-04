@@ -41,6 +41,11 @@ final class DBusWriter {
         return Arrays.copyOf(data, size);
     }
 
+    /// Overwrites what was written, which [#toByteArray()] has copied out.
+    void erase() {
+        Arrays.fill(data, 0, size, (byte) 0);
+    }
+
     void pad(int alignment) {
         while (size % alignment != 0) {
             putByte(0);
@@ -91,7 +96,10 @@ final class DBusWriter {
 
     private void ensure(int more) {
         if (size + more > data.length) {
-            data = Arrays.copyOf(data, Math.max(size + more, data.length * 2));
+            var grown = Arrays.copyOf(data, Math.max(size + more, data.length * 2));
+            // A message may carry a secret: the array left behind is erased
+            Arrays.fill(data, (byte) 0);
+            data = grown;
         }
     }
 

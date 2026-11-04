@@ -1,6 +1,7 @@
 package com.github.auties00.coffer.backend.macos;
 
 import com.github.auties00.coffer.CofferException;
+import com.github.auties00.coffer.backend.LiveSecret;
 import com.github.auties00.coffer.backend.Vault;
 import com.github.auties00.coffer.backend.macos.ffm.Darwin;
 
@@ -27,6 +28,9 @@ import java.util.function.IntSupplier;
 /// refused while one runs. An interactive vault leaves the switch alone and waits as long as the keychain's dialog
 /// stays open. With interaction off, a locked keychain fails a call with `errSecAuthFailed`, the status of a wrong
 /// password, so that status is reported as locked when the default keychain is.
+///
+/// A secret goes between its native memory and Core Foundation data objects with no copy on the heap; the Security
+/// framework copies it on the way in and out into memory of its own, which it frees without erasing.
 ///
 /// @spec https://developer.apple.com/documentation/security/keychain-services Keychain services
 public final class KeychainVault implements Vault {
@@ -65,7 +69,7 @@ public final class KeychainVault implements Vault {
     }
 
     @Override
-    public byte[] read(String name) {
+    public LiveSecret read(String name) {
         try (var objects = new CoreFoundation()) {
             var query = objects.dictionary(
                     Darwin.kSecClass(), Darwin.kSecClassGenericPassword(),
@@ -80,12 +84,12 @@ public final class KeychainVault implements Vault {
             }
             check(status, "read the secret " + name);
             var data = objects.own(result.get(ValueLayout.ADDRESS, 0));
-            return CoreFoundation.bytes(data);
+            return LiveSecret.copyOf(CoreFoundation.bytes(data));
         }
     }
 
     @Override
-    public void write(String name, byte[] secret) {
+    public void write(String name, MemorySegment secret) {
         try (var objects = new CoreFoundation()) {
             var query = objects.dictionary(
                     Darwin.kSecClass(), Darwin.kSecClassGenericPassword(),
@@ -225,13 +229,9 @@ public final class KeychainVault implements Vault {
             return checked(own(created), "a string");
         }
 
-        MemorySegment data(byte[] value) {
-            var copy = arena.allocateFrom(ValueLayout.JAVA_BYTE, value);
-            try {
-                return checked(own(Darwin.CFDataCreate(MemorySegment.NULL, copy, value.length)), "a data object");
-            } finally {
-                copy.fill((byte) 0);
-            }
+        /// {@return a data object holding a copy of `value`, which Core Foundation makes from native memory}
+        MemorySegment data(MemorySegment value) {
+            return checked(own(Darwin.CFDataCreate(MemorySegment.NULL, value, value.byteSize())), "a data object");
         }
 
         /// {@return a dictionary of the alternating keys and values in `entries`}
@@ -255,10 +255,9 @@ public final class KeychainVault implements Vault {
             return object;
         }
 
-        /// {@return the bytes of the data object `data`}
-        static byte[] bytes(MemorySegment data) {
-            var length = Darwin.CFDataGetLength(data);
-            return Darwin.CFDataGetBytePtr(data).reinterpret(length).toArray(ValueLayout.JAVA_BYTE);
+        /// {@return the memory of the data object `data`, valid until it is released}
+        static MemorySegment bytes(MemorySegment data) {
+            return Darwin.CFDataGetBytePtr(data).reinterpret(Darwin.CFDataGetLength(data));
         }
 
         /// {@return the string object `string` as a Java string}

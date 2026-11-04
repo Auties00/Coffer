@@ -3,6 +3,7 @@ package com.github.auties00.coffer.backend;
 import com.github.auties00.coffer.Backend;
 import com.github.auties00.coffer.Coffer;
 import com.github.auties00.coffer.CofferException;
+import com.github.auties00.coffer.Secret;
 
 import java.io.IOException;
 import java.nio.channels.FileChannel;
@@ -13,7 +14,6 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.security.SecureRandom;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -113,10 +113,29 @@ public final class LiveCoffer implements Coffer {
     }
 
     @Override
-    public Optional<byte[]> read(String name) {
+    public Optional<Secret> read(String name) {
         Names.checkName(name);
         ensureOpen();
         return Optional.ofNullable(vault.read(name));
+    }
+
+    @Override
+    public void write(String name, Secret secret) {
+        Names.checkName(name);
+        Objects.requireNonNull(secret, "secret");
+        if (secret.isDestroyed()) {
+            throw new IllegalArgumentException("The secret is destroyed");
+        }
+        if (secret.length() > MAX_LENGTH) {
+            throw new IllegalArgumentException("A secret holds at most " + MAX_LENGTH + " bytes: " + secret.length());
+        }
+        ensureOpen();
+        var memory = ((LiveSecret) secret).memory();
+        withDirectoryLock(() -> {
+            claim();
+            vault.write(name, memory);
+            return null;
+        });
     }
 
     @Override
@@ -126,16 +145,13 @@ public final class LiveCoffer implements Coffer {
         if (secret.length > MAX_LENGTH) {
             throw new IllegalArgumentException("A secret holds at most " + MAX_LENGTH + " bytes: " + secret.length);
         }
-        ensureOpen();
-        withDirectoryLock(() -> {
-            claim();
-            vault.write(name, secret.clone());
-            return null;
-        });
+        try (var copy = LiveSecret.copyOf(secret)) {
+            write(name, copy);
+        }
     }
 
     @Override
-    public byte[] readOrCreate(String name, int length) {
+    public Secret readOrCreate(String name, int length) {
         Names.checkName(name);
         if (length < 1 || length > MAX_LENGTH) {
             throw new IllegalArgumentException("A new secret holds 1 to " + MAX_LENGTH + " bytes: " + length);
@@ -152,10 +168,14 @@ public final class LiveCoffer implements Coffer {
                 return raced;
             }
             claim();
-            var created = new byte[length];
-            RANDOM.nextBytes(created);
-            vault.write(name, created);
-            return created.clone();
+            var created = LiveSecret.random(length, RANDOM);
+            try {
+                vault.write(name, created.memory());
+                return created;
+            } catch (RuntimeException exception) {
+                created.destroy();
+                throw exception;
+            }
         });
     }
 
@@ -194,13 +214,10 @@ public final class LiveCoffer implements Coffer {
                 var copied = new ArrayList<String>();
                 try {
                     for (var name : vault.names()) {
-                        var secret = vault.read(name);
-                        if (secret != null) {
-                            try {
-                                destination.write(name, secret);
+                        try (var secret = vault.read(name)) {
+                            if (secret != null) {
+                                destination.write(name, secret.memory());
                                 copied.add(name);
-                            } finally {
-                                Arrays.fill(secret, (byte) 0);
                             }
                         }
                     }
