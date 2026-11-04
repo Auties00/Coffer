@@ -18,7 +18,7 @@ try (var coffer = Coffer.open("myapp")) {
 |---|---|---|
 | `WINDOWS_DATA_PROTECTION` | Windows | Files sealed by `CryptProtectData` in user scope, bound to their name |
 | `MACOS_KEYCHAIN` | macOS | Generic passwords of the default keychain |
-| `SECRET_SERVICE` | Linux, the BSDs | Items of the freedesktop Secret Service (GNOME Keyring, KeePassXC, KWallet), over D-Bus |
+| `SECRET_SERVICE` | Linux, FreeBSD | Items of the freedesktop Secret Service (GNOME Keyring, KeePassXC, KWallet 5.97 and later), over D-Bus |
 | `FILE` | everywhere | Owner-only files, unencrypted |
 
 A new namespace uses the system's keyring, or files where it cannot be reached; `protection()` says which kind it got,
@@ -49,6 +49,12 @@ The Windows and macOS backends call the operating system through the Foreign Fun
 The Secret Service backend speaks D-Bus in Java, and needs no native access for a bus that listens on a socket path,
 as every systemd session's does; a bus that listens only on a Linux abstract socket, as `dbus-daemon` does on
 distributions without systemd's user bus, is reached through libc, which needs it.
+
+## Tested on
+
+CI runs every test against the real keyring of Windows, macOS, Linux (with the session bus on a socket path, and on an
+abstract socket only) and FreeBSD, then locks the keyring and checks that a coffer that may not ask the user fails
+with `LOCKED` rather than wait.
 
 ## Building
 
