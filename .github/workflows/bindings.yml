@@ -78,42 +78,6 @@ jobs:
           rm -rf src/main/java/com/github/auties00/coffer/backend/macos/ffm
           jextract/bin/jextract @bindings/macos.args bindings/macos.h
 
-      - name: Diagnose the keychain interaction functions
-        if: always()
-        run: |
-          sdk=$(xcrun --show-sdk-path)
-          echo "== TargetConditionals.h"
-          grep -n "define_target_os_macros\|DYNAMIC_TARGETS_ENABLED\|define TARGET_OS_OSX\|__APPLE_CC__\|__is_target_os(macos" "$sdk/usr/include/TargetConditionals.h" | head -30
-          echo "== Security.h around SecKeychain.h"
-          awk 'NR>=40 && NR<=80' "$sdk/System/Library/Frameworks/Security.framework/Headers/Security.h" | grep -n "#if\|#else\|#endif\|SecKeychain.h" || true
-          cat > probe.h <<'EOF'
-          #include <Security/Security.h>
-          #ifdef __APPLE_CC__
-          #define PROBE_APPLE_CC __APPLE_CC__
-          #endif
-          #ifdef __aarch64__
-          #define PROBE_AARCH64 1
-          #endif
-          #ifdef __x86_64__
-          #define PROBE_X86_64 1
-          #endif
-          #define PROBE_TARGET_OS_MAC TARGET_OS_MAC
-          #define PROBE_TARGET_OS_OSX TARGET_OS_OSX
-          #define PROBE_TARGET_OS_IPHONE TARGET_OS_IPHONE
-          #define PROBE_DYNAMIC DYNAMIC_TARGETS_ENABLED
-          #define PROBE_SEC_OS_OSX SEC_OS_OSX
-          #define PROBE_SEC_OS_OSX_INCLUDES SEC_OS_OSX_INCLUDES
-          EOF
-          sed -i '' 's/^          //' probe.h
-          args=()
-          for name in PROBE_APPLE_CC PROBE_AARCH64 PROBE_X86_64 PROBE_TARGET_OS_MAC PROBE_TARGET_OS_OSX PROBE_TARGET_OS_IPHONE PROBE_DYNAMIC PROBE_SEC_OS_OSX PROBE_SEC_OS_OSX_INCLUDES; do
-            args+=(--include-constant "$name")
-          done
-          jextract/bin/jextract --output probe "${args[@]}" probe.h > probe.log 2>&1 || cat probe.log
-          echo "== what jextract's clang computes"
-          grep -rhE "static final [a-z]+ PROBE_[A-Z_0-9]+ = " probe || echo "no probe constants generated"
-          jextract/bin/jextract --version || true
-
       - name: Check every symbol was generated
         run: bash bindings/check.sh bindings/macos.args src/main/java/com/github/auties00/coffer/backend/macos/ffm jextract/bin/jextract bindings/macos.h
 
