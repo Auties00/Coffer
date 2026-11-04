@@ -25,7 +25,8 @@ import java.util.function.IntSupplier;
 /// honours, and `SecKeychainSetUserInteractionAllowed` is the only switch it obeys. The switch is process-wide, so the
 /// calls of every non-interactive vault are serialized, and other keychain users of the process may see interaction
 /// refused while one runs. An interactive vault leaves the switch alone and waits as long as the keychain's dialog
-/// stays open.
+/// stays open. With interaction off, a locked keychain fails a call with `errSecAuthFailed`, the status of a wrong
+/// password, so that status is reported as locked when the default keychain is.
 ///
 /// @spec https://developer.apple.com/documentation/security/keychain-services Keychain services
 public final class KeychainVault implements Vault {
@@ -152,15 +153,35 @@ public final class KeychainVault implements Vault {
         }
     }
 
-    private static void check(int status, String operation) {
+    private void check(int status, String operation) {
         if (status == Darwin.errSecSuccess()) {
             return;
         }
         var reason = status == Darwin.errSecInteractionNotAllowed() || status == Darwin.errSecUserCanceled() ? CofferException.Reason.LOCKED
-                : status == Darwin.errSecAuthFailed() ? CofferException.Reason.DENIED
+                // A locked keychain that may not ask for its password fails as if the password were wrong
+                : status == Darwin.errSecAuthFailed() ? (!interactive && defaultKeychainLocked() ? CofferException.Reason.LOCKED : CofferException.Reason.DENIED)
                 : status == Darwin.errSecNoSuchKeychain() || status == Darwin.errSecNotAvailable() ? CofferException.Reason.UNAVAILABLE
                 : CofferException.Reason.IO;
         throw new CofferException(reason, "The keychain could not " + operation + ": " + message(status) + " (" + status + ")", null);
+    }
+
+    /// {@return whether the user's default keychain, where the vault writes, is locked; `false` if that cannot be
+    /// read}
+    private static boolean defaultKeychainLocked() {
+        try (var arena = Arena.ofConfined()) {
+            var keychain = arena.allocate(ValueLayout.ADDRESS);
+            if (Darwin.SecKeychainCopyDefault(keychain) != Darwin.errSecSuccess()) {
+                return false;
+            }
+            var reference = keychain.get(ValueLayout.ADDRESS, 0);
+            try {
+                var status = arena.allocate(ValueLayout.JAVA_INT);
+                return Darwin.SecKeychainGetStatus(reference, status) == Darwin.errSecSuccess()
+                        && (status.get(ValueLayout.JAVA_INT, 0) & Darwin.kSecUnlockStateStatus()) == 0;
+            } finally {
+                Darwin.CFRelease(reference);
+            }
+        }
     }
 
     private static String message(int status) {

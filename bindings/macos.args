@@ -106,3 +106,9 @@ CFDictionaryHashCallBack
 SecKeychainGetUserInteractionAllowed
 --include-function
 SecKeychainSetUserInteractionAllowed
+--include-function
+SecKeychainCopyDefault
+--include-function
+SecKeychainGetStatus
+--include-constant
+kSecUnlockStateStatus
