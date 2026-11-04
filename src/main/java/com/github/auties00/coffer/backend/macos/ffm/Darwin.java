@@ -1756,6 +1756,136 @@ public class Darwin extends Darwin$shared {
            throw new AssertionError("should not reach here", ex$);
         }
     }
+    private static final int kSecUnlockStateStatus = (int)1L;
+    /**
+     * {@snippet lang=c :
+     * enum <anonymous>.kSecUnlockStateStatus = 1
+     * }
+     */
+    public static int kSecUnlockStateStatus() {
+        return kSecUnlockStateStatus;
+    }
+
+    private static class SecKeychainCopyDefault {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            Darwin.C_INT,
+            Darwin.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("SecKeychainCopyDefault");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * OSStatus SecKeychainCopyDefault(SecKeychainRef  _Nullable * _Nonnull keychain)
+     * }
+     */
+    public static FunctionDescriptor SecKeychainCopyDefault$descriptor() {
+        return SecKeychainCopyDefault.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * OSStatus SecKeychainCopyDefault(SecKeychainRef  _Nullable * _Nonnull keychain)
+     * }
+     */
+    public static MethodHandle SecKeychainCopyDefault$handle() {
+        return SecKeychainCopyDefault.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * OSStatus SecKeychainCopyDefault(SecKeychainRef  _Nullable * _Nonnull keychain)
+     * }
+     */
+    public static MemorySegment SecKeychainCopyDefault$address() {
+        return SecKeychainCopyDefault.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * OSStatus SecKeychainCopyDefault(SecKeychainRef  _Nullable * _Nonnull keychain)
+     * }
+     */
+    public static int SecKeychainCopyDefault(MemorySegment keychain) {
+        var mh$ = SecKeychainCopyDefault.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("SecKeychainCopyDefault", keychain);
+            }
+            return (int)mh$.invokeExact(keychain);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class SecKeychainGetStatus {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            Darwin.C_INT,
+            Darwin.C_POINTER,
+            Darwin.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("SecKeychainGetStatus");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * OSStatus SecKeychainGetStatus(SecKeychainRef  _Nullable keychain, SecKeychainStatus * _Nonnull keychainStatus)
+     * }
+     */
+    public static FunctionDescriptor SecKeychainGetStatus$descriptor() {
+        return SecKeychainGetStatus.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * OSStatus SecKeychainGetStatus(SecKeychainRef  _Nullable keychain, SecKeychainStatus * _Nonnull keychainStatus)
+     * }
+     */
+    public static MethodHandle SecKeychainGetStatus$handle() {
+        return SecKeychainGetStatus.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * OSStatus SecKeychainGetStatus(SecKeychainRef  _Nullable keychain, SecKeychainStatus * _Nonnull keychainStatus)
+     * }
+     */
+    public static MemorySegment SecKeychainGetStatus$address() {
+        return SecKeychainGetStatus.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * OSStatus SecKeychainGetStatus(SecKeychainRef  _Nullable keychain, SecKeychainStatus * _Nonnull keychainStatus)
+     * }
+     */
+    public static int SecKeychainGetStatus(MemorySegment keychain, MemorySegment keychainStatus) {
+        var mh$ = SecKeychainGetStatus.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("SecKeychainGetStatus", keychain, keychainStatus);
+            }
+            return (int)mh$.invokeExact(keychain, keychainStatus);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
 
     private static class SecKeychainSetUserInteractionAllowed {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
