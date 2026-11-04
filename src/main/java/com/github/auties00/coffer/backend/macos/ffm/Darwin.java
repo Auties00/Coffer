@@ -1756,5 +1756,125 @@ public class Darwin extends Darwin$shared {
            throw new AssertionError("should not reach here", ex$);
         }
     }
+
+    private static class SecKeychainSetUserInteractionAllowed {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            Darwin.C_INT,
+            Darwin.C_CHAR
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("SecKeychainSetUserInteractionAllowed");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * OSStatus SecKeychainSetUserInteractionAllowed(Boolean state)
+     * }
+     */
+    public static FunctionDescriptor SecKeychainSetUserInteractionAllowed$descriptor() {
+        return SecKeychainSetUserInteractionAllowed.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * OSStatus SecKeychainSetUserInteractionAllowed(Boolean state)
+     * }
+     */
+    public static MethodHandle SecKeychainSetUserInteractionAllowed$handle() {
+        return SecKeychainSetUserInteractionAllowed.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * OSStatus SecKeychainSetUserInteractionAllowed(Boolean state)
+     * }
+     */
+    public static MemorySegment SecKeychainSetUserInteractionAllowed$address() {
+        return SecKeychainSetUserInteractionAllowed.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * OSStatus SecKeychainSetUserInteractionAllowed(Boolean state)
+     * }
+     */
+    public static int SecKeychainSetUserInteractionAllowed(byte state) {
+        var mh$ = SecKeychainSetUserInteractionAllowed.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("SecKeychainSetUserInteractionAllowed", state);
+            }
+            return (int)mh$.invokeExact(state);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class SecKeychainGetUserInteractionAllowed {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            Darwin.C_INT,
+            Darwin.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("SecKeychainGetUserInteractionAllowed");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * OSStatus SecKeychainGetUserInteractionAllowed(Boolean * _Nonnull state)
+     * }
+     */
+    public static FunctionDescriptor SecKeychainGetUserInteractionAllowed$descriptor() {
+        return SecKeychainGetUserInteractionAllowed.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * OSStatus SecKeychainGetUserInteractionAllowed(Boolean * _Nonnull state)
+     * }
+     */
+    public static MethodHandle SecKeychainGetUserInteractionAllowed$handle() {
+        return SecKeychainGetUserInteractionAllowed.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * OSStatus SecKeychainGetUserInteractionAllowed(Boolean * _Nonnull state)
+     * }
+     */
+    public static MemorySegment SecKeychainGetUserInteractionAllowed$address() {
+        return SecKeychainGetUserInteractionAllowed.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * OSStatus SecKeychainGetUserInteractionAllowed(Boolean * _Nonnull state)
+     * }
+     */
+    public static int SecKeychainGetUserInteractionAllowed(MemorySegment state) {
+        var mh$ = SecKeychainGetUserInteractionAllowed.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("SecKeychainGetUserInteractionAllowed", state);
+            }
+            return (int)mh$.invokeExact(state);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
 }
 
