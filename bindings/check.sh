@@ -46,7 +46,11 @@ dump=$(mktemp)
 if "$jextract" "@$arguments" --dump-includes "$dump" "$header" > /dev/null 2>&1; then
   echo "What the parser saw of them:"
   for entry in "${missing[@]}"; do
-    grep -w -- "${entry#* }" "$dump" || echo "  ${entry#* }: not seen in $header"
+    name=${entry#* }
+    if ! grep -w -- "$name" "$dump"; then
+      echo "  $name: not seen in $header; names it saw that start alike:"
+      grep -i -- "${name:0:11}" "$dump" | head -n 5 | sed 's/^/    /' || true
+    fi
   done
 fi
 exit 1

@@ -78,6 +78,21 @@ jobs:
           rm -rf src/main/java/com/github/auties00/coffer/backend/macos/ffm
           jextract/bin/jextract @bindings/macos.args bindings/macos.h
 
+      - name: Diagnose the keychain interaction functions
+        if: always()
+        run: |
+          sdk=$(xcrun --show-sdk-path)
+          echo "SDK: $sdk"
+          headers="$sdk/System/Library/Frameworks/Security.framework/Headers"
+          grep -n -B4 -A1 "SecKeychain.h" "$headers/Security.h" || true
+          grep -n -B2 -A3 "SecKeychainSetUserInteractionAllowed" "$headers/SecKeychain.h" || true
+          printf '#include <Security/Security.h>\n' > probe.h
+          jextract/bin/jextract --output probe --include-constant TARGET_OS_OSX --include-constant TARGET_OS_MAC --include-constant SEC_OS_OSX --include-constant SEC_OS_OSX_INCLUDES probe.h > /dev/null 2>&1 || true
+          grep -rh -A3 "static int \(TARGET_OS_OSX\|TARGET_OS_MAC\|SEC_OS_OSX\|SEC_OS_OSX_INCLUDES\)()" probe | grep -E "static int|return" || echo "no platform macros generated"
+          jextract/bin/jextract --dump-includes probe.txt probe.h > /dev/null 2>&1 || true
+          grep -E "TARGET_OS_OSX|SEC_OS_OSX|SecKeychainGetTypeID|SecKeychainCopyDefault" probe.txt || echo "none of the keychain markers in the dump"
+          jextract/bin/jextract --version || true
+
       - name: Check every symbol was generated
         run: bash bindings/check.sh bindings/macos.args src/main/java/com/github/auties00/coffer/backend/macos/ffm jextract/bin/jextract bindings/macos.h
 
