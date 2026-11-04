@@ -47,6 +47,9 @@ jobs:
           & $launcher.FullName "@bindings/windows.args" bindings/windows.h
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Check every symbol was generated
+        run: bash bindings/check.sh bindings/windows.args src/main/java/com/github/auties00/coffer/backend/windows/ffm "$(ls jextract/bin/jextract.bat jextract/bin/jextract.cmd jextract/bin/jextract.exe 2>/dev/null | head -n 1)" bindings/windows.h
+
       - uses: actions/upload-artifact@v4
         with:
           name: windows-bindings
@@ -75,6 +78,9 @@ jobs:
           rm -rf src/main/java/com/github/auties00/coffer/backend/macos/ffm
           jextract/bin/jextract @bindings/macos.args bindings/macos.h
 
+      - name: Check every symbol was generated
+        run: bash bindings/check.sh bindings/macos.args src/main/java/com/github/auties00/coffer/backend/macos/ffm jextract/bin/jextract bindings/macos.h
+
       - uses: actions/upload-artifact@v4
         with:
           name: macos-bindings
@@ -99,6 +105,9 @@ jobs:
         run: |
           rm -rf src/main/java/com/github/auties00/coffer/backend/dbus/ffm
           jextract/bin/jextract @bindings/linux.args bindings/linux.h
+
+      - name: Check every symbol was generated
+        run: bash bindings/check.sh bindings/linux.args src/main/java/com/github/auties00/coffer/backend/dbus/ffm jextract/bin/jextract bindings/linux.h
 
       - uses: actions/upload-artifact@v4
         with:
